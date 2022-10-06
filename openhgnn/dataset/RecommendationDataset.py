@@ -11,7 +11,7 @@ from . import AcademicDataset
 @register_dataset('recommendation')
 class RecommendationDataset(BaseDataset):
     """
-
+    因为暂时用不到这个任务，跳过不看
     """
     def __init__(self,*args, **kwargs):
         super(RecommendationDataset, self).__init__(*args, **kwargs)

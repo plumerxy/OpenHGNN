@@ -9,6 +9,8 @@ class BaseModel(nn.Module, metaclass=ABCMeta):
         Build the model instance from args and hg.
 
         So every subclass inheriting it should override the method.
+
+        cls是类本身，cls()相当于调用了BaseModel()构造实例，所以用这个函数可以先把参数取出来。用这些参数来构造model实例。
         """
         raise NotImplementedError("Models must implement the build_model_from_args method")
 

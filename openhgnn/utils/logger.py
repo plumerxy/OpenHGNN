@@ -108,6 +108,8 @@ class Logger:
         file named `filename` simultaneously.
         All the message that you want to log MUST be str.
 
+        负责存储各种需要的数据信息  如果我有想输出的信息，应该也要用这个吧
+
         Args:
             config (Config): An instance object of Config, used to record parameter information.
 

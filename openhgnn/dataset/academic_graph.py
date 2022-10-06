@@ -5,7 +5,8 @@ from dgl.data.utils import load_graphs
 
 
 class AcademicDataset(DGLDataset):
-
+    # acm数据集、imdb数据集、douban movie数据集、yelp数据集，没有存在本地，是通过这个类加载、预处理并且存储这些方法的。
+    # 具体怎么处理数据集的，就先不看了
     _prefix = 'https://s3.cn-north-1.amazonaws.com.cn/dgl-data/'
     _urls = {
         'academic4HetGNN': 'dataset/academic4HetGNN.zip',

@@ -13,6 +13,7 @@ __all__ = ['LinkPredictionDataset', 'HGB_LinkPrediction']
 @register_dataset('link_prediction')
 class LinkPredictionDataset(BaseDataset):
     """
+    因为暂时用不到这个任务，跳过不看
     metric: Accuracy, multi-label f1 or multi-class f1. Default: `accuracy`
     """
 

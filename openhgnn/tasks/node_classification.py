@@ -28,15 +28,15 @@ class NodeClassification(BaseTask):
     def __init__(self, args):
         super(NodeClassification, self).__init__()
         self.logger = args.logger
-        self.dataset = build_dataset(args.dataset, 'node_classification', logger=self.logger)
+        self.dataset = build_dataset(args.dataset, 'node_classification', logger=self.logger)  # task中包含数据集，先搭建数据集（如果到时候想用不同的数据集，不适配的时候可以从这里debug进去看看）
         # self.evaluator = Evaluator()
         self.logger = args.logger
         if hasattr(args, 'validation'):
             self.train_idx, self.val_idx, self.test_idx = self.dataset.get_split(args.validation)
         else:
-            self.train_idx, self.val_idx, self.test_idx = self.dataset.get_split()
+            self.train_idx, self.val_idx, self.test_idx = self.dataset.get_split()  # 划分数据集用的mask也存在task中
         self.evaluator = Evaluator(args.seed)
-        self.labels = self.dataset.get_labels()
+        self.labels = self.dataset.get_labels()  # 节点分类任务所需label
         self.multi_label = self.dataset.multi_label
         
         if hasattr(args, 'evaluation_metric'):
@@ -45,7 +45,7 @@ class NodeClassification(BaseTask):
             if args.dataset in ['aifb', 'mutag', 'bgs', 'am']:
                 self.evaluation_metric = 'acc'
             else:
-                self.evaluation_metric = 'f1'
+                self.evaluation_metric = 'f1'  # 节点分类任务，默认使用f1score作为评估指标。 如果需要别的，应该可以指定吧，写在evaluator中就行，
 
     def get_graph(self):
         return self.dataset.g
@@ -53,7 +53,7 @@ class NodeClassification(BaseTask):
     def get_loss_fn(self):
         if self.multi_label:
             return nn.BCEWithLogitsLoss()
-        return F.cross_entropy
+        return F.cross_entropy  # 分类任务默认loss func是cross entropy
 
     def get_evaluator(self, name):
         if name == 'acc':
@@ -87,7 +87,7 @@ class NodeClassification(BaseTask):
             result_dict = evaluator.eval(input_dict)
             return result_dict
         elif self.evaluation_metric == 'f1':
-            f1_dict = self.evaluator.f1_node_classification(self.labels[mask], pred)
+            f1_dict = self.evaluator.f1_node_classification(self.labels[mask], pred)  # 图节点分类的评估指标已经写在evaluator中了，到时候我的指标也可以加在evaluator中吧
             return f1_dict
         else:
             raise ValueError('The evaluation metric is not supported!')

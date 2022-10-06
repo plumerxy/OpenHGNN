@@ -48,13 +48,13 @@ class BaseFlow(ABC):
         self.model_name = args.model_name
         self.model = args.model
         self.device = args.device
-        self.task = build_task(args)
-        self.hg = self.task.get_graph().to(self.device)
-        self.args.meta_paths_dict = self.task.dataset.meta_paths_dict
-        self.patience = args.patience
+        self.task = build_task(args)  # 搭建相应的task对象，包含数据集
+        self.hg = self.task.get_graph().to(self.device)   # 到这里已经是dgl.heterograph了 在搭建task的时候已经把图数据集处理好了
+        self.args.meta_paths_dict = self.task.dataset.meta_paths_dict  # 记录有哪些要用到的元路径
+        self.patience = args.patience  # 暂时不知道这个参数是做什么的
         self.max_epoch = args.max_epoch
-        self.optimizer = None
-        self.loss_fn = self.task.get_loss_fn()
+        self.optimizer = None  # 先不设定optimizer？？？
+        self.loss_fn = self.task.get_loss_fn()  # 从task中获得，用的torch的传统loss func，节点分类问题就是交叉熵损失函数
 
     def preprocess(self):
         r"""

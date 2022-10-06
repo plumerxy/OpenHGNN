@@ -2,7 +2,7 @@ from abc import ABC, ABCMeta, abstractmethod
 from dgl.data.utils import load_graphs
 
 
-class BaseDataset(ABC):
+class BaseDataset(ABC):  # ABC是抽象基类 表明basedataset是一个抽象类
     def __init__(self, *args, **kwargs):
         super(BaseDataset, self).__init__()
         self.logger = kwargs['logger']
@@ -14,6 +14,9 @@ class BaseDataset(ABC):
         """
         load graph from disk and the file path of graph is generally stored in ``./openhgnn/dataset/``.
 
+        从graph.bin中读取异质图，获得一个dgl.hetrograph对象。
+        从这里看，load dataset的时候，是已经处理好的二进制格式的图数据了。
+
         Parameters
         ----------
         file_path: the file path storing the graph.bin
@@ -24,4 +27,5 @@ class BaseDataset(ABC):
         """
         g, _ = load_graphs(file_path)
         return g[0]
+
 

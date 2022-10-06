@@ -57,7 +57,7 @@ ohgbn_datasets = ['ohgbn-Freebase', 'ohgbn-yelp2', 'ohgbn-acm', 'ohgbn-imdb']
 def build_dataset(dataset, task, *args, **kwargs):
     if isinstance(dataset, DGLDataset):
         return dataset
-    if dataset in CLASS_DATASETS:
+    if dataset in CLASS_DATASETS:  # 如果使用dplp4gtn，acm4gtn和imdb4gtn，用这个函数读取数据集。
         return build_dataset_v2(dataset, task)
     if not try_import_task_dataset(task):
         exit(1)
@@ -98,18 +98,18 @@ from .LinkPredictionDataset import LinkPredictionDataset
 from .RecommendationDataset import RecommendationDataset
 
 
-def build_dataset_v2(dataset, task):
+def build_dataset_v2(dataset, task):  # GTN数据集
     if dataset in CLASS_DATASETS:
         path = ".".join(CLASS_DATASETS[dataset].split(".")[:-1])
-        module = importlib.import_module(path)
-        class_name = CLASS_DATASETS[dataset].split(".")[-1]
-        dataset_class = getattr(module, class_name)
-        d = dataset_class()
+        module = importlib.import_module(path)  # openhgnn.dataset 算是一个module   动态调起这个module
+        class_name = CLASS_DATASETS[dataset].split(".")[-1]  # 再获取要加载的数据集对应的类名
+        dataset_class = getattr(module, class_name)  # 动态调起数据集对应的类
+        d = dataset_class()  # 构造一个对应数据集类的对象
         if task == 'node_classification':
             target_ntype = getattr(d, 'category')
             if target_ntype is None:
                 target_ntype = getattr(d, 'target_ntype')
-            res = AsNodeClassificationDataset(d, target_ntype=target_ntype)
+            res = AsNodeClassificationDataset(d, target_ntype=target_ntype)  # 拿到数据集，还要把它的格式进行一些转化，以便于适应节点分类任务。 添加了mask之类的
         elif task == 'link_prediction':
             target_link = getattr(d, 'target_link')
             target_link_r = getattr(d, 'target_link_r')

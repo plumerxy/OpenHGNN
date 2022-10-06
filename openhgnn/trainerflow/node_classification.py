@@ -14,6 +14,8 @@ class NodeClassification(BaseFlow):
     Node classification flow,
 
     The task is to classify the nodes of target nodes.
+
+    节点分类问题所使用的训练流，train函数在这里
     Note: If the output dim is not equal the number of classes, we will modify the output dim with the number of classes.
     """
 
@@ -28,28 +30,28 @@ class NodeClassification(BaseFlow):
             The number of classes for category node type
             
         """
-        super(NodeClassification, self).__init__(args)
-        self.args.category = self.task.dataset.category
+        super(NodeClassification, self).__init__(args)  # base flow -> build task
+        self.args.category = self.task.dataset.category  # 目标节点
         self.category = self.args.category
         
-        self.num_classes = self.task.dataset.num_classes
+        self.num_classes = self.task.dataset.num_classes  # 分类个数
 
         if not hasattr(self.task.dataset, 'out_dim') or args.out_dim != self.num_classes:
             self.logger.info('[NC Specific] Modify the out_dim with num_classes')
             args.out_dim = self.num_classes
-        self.args.out_node_type = [self.category]
+        self.args.out_node_type = [self.category]  # 为什么要搞这么多个category...
 
-        self.model = build_model(self.model).build_model_from_args(self.args, self.hg).to(self.device)
+        self.model = build_model(self.model).build_model_from_args(self.args, self.hg).to(self.device)  # 获取相应的类变量，并通过类方法从arg中构造相应的model对象，设置网络中需要用的各种层的参数
 
         self.optimizer = self.candidate_optimizer[args.optimizer](self.model.parameters(),
                                                                   lr=args.lr, weight_decay=args.weight_decay)
 
-        self.train_idx, self.valid_idx, self.test_idx = self.task.get_split()
-        self.labels = self.task.get_labels().to(self.device)
+        self.train_idx, self.valid_idx, self.test_idx = self.task.get_split()  # 如何划分数据集
+        self.labels = self.task.get_labels().to(self.device)  # 待分类节点的label
 
-        if self.args.mini_batch_flag:
+        if self.args.mini_batch_flag:  # 如果想要用mini_batch
             # sampler = dgl.dataloading.MultiLayerNeighborSampler([self.args.fanout] * self.args.num_layers)
-            sampler = dgl.dataloading.MultiLayerFullNeighborSampler(self.args.num_layers)
+            sampler = dgl.dataloading.MultiLayerFullNeighborSampler(self.args.num_layers)  # 但是，num_layers实际上是GTNlayer的层数，而不是进行信息传递的层数，按这个层数采样是可以的吗？
             self.train_loader = dgl.dataloading.DataLoader(
                 self.hg.cpu(), {self.category: self.train_idx.cpu()}, sampler,
                 batch_size=self.args.batch_size, device=self.device, shuffle=True, num_workers=0)
@@ -67,7 +69,7 @@ class NodeClassification(BaseFlow):
         Last, we will call preprocess_feature.
 
         """
-        if self.args.model == 'GTN':
+        if self.args.model == 'GTN':  # GTN的优化器需要单独设置？
             if hasattr(self.args, 'adaptive_lr_flag') and self.args.adaptive_lr_flag == True:
                 self.optimizer = torch.optim.Adam([{'params': self.model.gcn.parameters()},
                                                    {'params': self.model.linear1.parameters()},
@@ -103,20 +105,20 @@ class NodeClassification(BaseFlow):
 
     def train(self):
         self.preprocess()
-        stopper = EarlyStopping(self.args.patience, self._checkpoint)
-        epoch_iter = tqdm(range(self.max_epoch))
-        for epoch in epoch_iter:
-            if self.args.mini_batch_flag:
+        stopper = EarlyStopping(self.args.patience, self._checkpoint)  # 早停法 当测试集的表现开始下降的时候，就停止训练
+        epoch_iter = tqdm(range(self.max_epoch))  # 最多多少个epoch
+        for epoch in epoch_iter:  # 开始训练，对每个epoch
+            if self.args.mini_batch_flag:  # mini batch的训练先不看了
                 train_loss = self._mini_train_step()
             else:
-                train_loss = self._full_train_step()
-            if epoch % self.evaluate_interval == 0:
+                train_loss = self._full_train_step()   # 用全图训练
+            if epoch % self.evaluate_interval == 0:  # 应该是多少个epoch评估一次
                 if self.args.mini_batch_flag and hasattr(self, 'val_loader'):
                     metric_dict, losses = self._mini_test_step(modes=['train', 'valid', 'test'])
                     # train_score, train_loss = self._mini_test_step(modes='train')
                     # val_score, val_loss = self._mini_test_step(modes='valid')
                 else:
-                    metric_dict, losses = self._full_test_step(modes=['train', 'valid', 'test'])
+                    metric_dict, losses = self._full_test_step(modes=['train', 'valid', 'test'])  # 计算了三个数据集的评估指标值和loss值 保存为3个字典
                 val_loss = losses['valid']
                 self.logger.train_info(f"Epoch: {epoch}, Train loss: {train_loss:.4f}, Valid loss: {val_loss:.4f}. "
                                        + self.logger.metric2str(metric_dict))
@@ -146,15 +148,15 @@ class NodeClassification(BaseFlow):
         self.logger.train_info('[Test Info]' + self.logger.metric2str(metric_dict))
         return dict(metric=metric_dict, epoch=epoch)
 
-    def _full_train_step(self):
-        self.model.train()
-        h_dict = self.model.input_feature()
-        logits = self.model(self.hg, h_dict)[self.category]
-        loss = self.loss_fn(logits[self.train_idx], self.labels[self.train_idx])
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        return loss.item()
+    def _full_train_step(self):  # 用全图训练的过程
+        self.model.train()  # 只是声明一下现在是训练模式，这部分并不会进行前向或者是后向传播
+        h_dict = self.model.input_feature()  # 先把节点特征提取出来
+        logits = self.model(self.hg, h_dict)[self.category]   # 就目前的模型进行一次前向传播 得到预测结果
+        loss = self.loss_fn(logits[self.train_idx], self.labels[self.train_idx])  # loss func用的是交叉熵函数， pytorch的这个函数里好像本身提供softmax这个步骤，所以gtn最后的分类结果是一个linear，没有激活
+        self.optimizer.zero_grad()  # 清空过往梯度
+        loss.backward()  # 进行反向传播计算梯度
+        self.optimizer.step()  # 根据梯度更新参数
+        return loss.item()  # 返回这一次训练的loss
 
     def _mini_train_step(self,):
         self.model.train()
@@ -197,9 +199,9 @@ class NodeClassification(BaseFlow):
         self.model.eval()
         with torch.no_grad():
             h_dict = self.model.input_feature()
-            logits = logits if logits else self.model(self.hg, h_dict)[self.category]
+            logits = logits if logits else self.model(self.hg, h_dict)[self.category]  # 图这个还挺省事，直接全都预测出来，test valid都能用
             masks = {}
-            for mode in modes:
+            for mode in modes:  # 把所需的掩模都搞出来
                 if mode == "train":
                     masks[mode] = self.train_idx
                 elif mode == "valid":

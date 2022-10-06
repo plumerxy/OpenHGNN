@@ -5,6 +5,7 @@ from dgl.data.utils import load_graphs
 
 
 class OHGBDataset(DGLDataset):
+    # 用来下载ohgb数据集并且进行预处理的部分
 
     _prefix = 'https://s3.cn-north-1.amazonaws.com.cn/dgl-data/'
     _urls = {

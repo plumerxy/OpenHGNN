@@ -10,6 +10,7 @@ from ogb.nodeproppred import Evaluator
 from tqdm import tqdm
 
 class Evaluator():
+    # 封装用于计算各种评估指标的方法
     def __init__(self, seed):
         self.seed = seed
 

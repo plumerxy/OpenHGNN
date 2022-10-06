@@ -265,35 +265,35 @@ def transform_relation_graph_list(hg, category, identity=True):
             category : string
                 Type of predicted nodes.
             identity : bool
-                If True, the identity matrix will be added to relation matrix set.
+                If True, the identity matrix will be added to relation matrix set.  在提取的边矩阵中 是否额外加入恒等矩阵
     """
 
-    # get target category id
+    # get target category id  先把hg遍历一遍，找到预测节点类型所对应的类型id
     for i, ntype in enumerate(hg.ntypes):
         if ntype == category:
-            category_id = i
-    g = dgl.to_homogeneous(hg, ndata='h')
+            category_id = i  # 预测节点类型的index
+    g = dgl.to_homogeneous(hg, ndata='h')   # 把异质图拆开成同质图  这个是dgl的方法 返回一个同质图
     # find out the target node ids in g
-    loc = (g.ndata[dgl.NTYPE] == category_id)
-    category_idx = th.arange(g.num_nodes())[loc]
+    loc = (g.ndata[dgl.NTYPE] == category_id)  # 用预测节点类型的类型id，定位到预测节点类型的所有节点的index
+    category_idx = th.arange(g.num_nodes())[loc]  # category_idx就是预测节点的全部index，在同质图中的位置
+    # 以上部分就是为了将图转换为同质图，并获得预测节点在同质图中的index
 
-
-    edges = g.edges()
-    etype = g.edata[dgl.ETYPE]
+    edges = g.edges()  # 这3w多个边，以两个tensor的形式可以获取到，一一对应构成一对边的两个节点，用节点的idx表示。
+    etype = g.edata[dgl.ETYPE]  # 其中每一条边在原异质图中的类型都有保存
     ctx = g.device
     #g.edata['w'] = th.ones(g.num_edges(), device=ctx)
-    num_edge_type = th.max(etype).item()
+    num_edge_type = th.max(etype).item()  # 有几种类型的边
 
     # norm = EdgeWeightNorm(norm='right')
     # edata = norm(g.add_self_loop(), th.ones(g.num_edges() + g.num_nodes(), device=ctx))
     graph_list = []
-    for i in range(num_edge_type + 1):
-        e_ids = th.nonzero(etype == i).squeeze(-1)
-        sg = dgl.graph((edges[0][e_ids], edges[1][e_ids]), num_nodes=g.num_nodes())
+    for i in range(num_edge_type + 1):  # 每种类型的边一个遍历
+        e_ids = th.nonzero(etype == i).squeeze(-1)  # 找出i这个边类型对应的全部边的index
+        sg = dgl.graph((edges[0][e_ids], edges[1][e_ids]), num_nodes=g.num_nodes())  # 把这些边挑出来，生成一张同质图 结点数相同 sg
         # sg.edata['w'] = edata[e_ids]
-        sg.edata['w'] = th.ones(sg.num_edges(), device=ctx)
+        sg.edata['w'] = th.ones(sg.num_edges(), device=ctx)  # w可能是用来存权重的？暂时还没确定
         graph_list.append(sg)
-    if identity == True:
+    if identity == True:  # 加一个恒等的同质图
         x = th.arange(0, g.num_nodes(), device=ctx)
         sg = dgl.graph((x, x))
         # sg.edata['w'] = edata[g.num_edges():]

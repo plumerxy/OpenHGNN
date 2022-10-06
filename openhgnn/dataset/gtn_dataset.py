@@ -106,7 +106,7 @@ class GTNDataset(DGLBuiltinDataset):
             raw_dir=raw_dir,
             force_reload=force_reload, verbose=verbose, transform=transform)
 
-    def process(self):
+    def process(self):  # 将原始数据处理成dgl.heterograph
         target_ntype = self.target_ntype
         canonical_etypes = self._canonical_etypes
 
@@ -150,23 +150,23 @@ class GTNDataset(DGLBuiltinDataset):
             data_dict[etype] = \
                 (th.from_numpy(ntype_idmap[src_ntype][src_nodes]).type(th.int64),
                  th.from_numpy(ntype_idmap[dst_ntype][dst_nodes]).type(th.int64))
-        g = dgl.heterograph(data_dict)
+        g = dgl.heterograph(data_dict)  # 从提供的数据中创建dgl图
 
         # split and label
-        all_label = np.full(g.num_nodes(target_ntype), -1, dtype=int)
+        all_label = np.full(g.num_nodes(target_ntype), -1, dtype=int)  # 先全都用-1进行填充
         for i, split in enumerate(['train', 'val', 'test']):
             node = np.array(labels[i])[:, 0]
             label = np.array(labels[i])[:, 1]
             all_label[node] = label
             g.nodes[target_ntype].data['{}_mask'.format(split)] = \
                 th.from_numpy(idx2mask(node, g.num_nodes(target_ntype))).type(th.bool)
-        g.nodes[target_ntype].data['label'] = th.from_numpy(all_label).type(th.long)
+        g.nodes[target_ntype].data['label'] = th.from_numpy(all_label).type(th.long)  # 加载label
 
         # node feature
         node_features = th.from_numpy(node_features).type(th.FloatTensor)
         for ntype in ntypes:
             idx = ntype_mask[ntype].nonzero()[0]
-            g.nodes[ntype].data['h'] = node_features[idx]
+            g.nodes[ntype].data['h'] = node_features[idx]  # 加载特征
 
         self._g = g
         self._num_classes = len(th.unique(self._g.nodes[self.target_ntype].data['label']))

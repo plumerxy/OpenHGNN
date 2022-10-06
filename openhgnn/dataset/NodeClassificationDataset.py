@@ -20,33 +20,37 @@ class NodeClassificationDataset(BaseDataset):
     So its subclass should contain attributes such as graph, category, num_classes and so on.
     Besides, it should implement the functions *get_labels()* and *get_split()*.
 
+    用于节点分类任务的数据集应该要继承这个类。确保需要的属性都被设定了。
+
     Attributes
     -------------
-    g : dgl.DGLHeteroGraph
+    g : dgl.DGLHeteroGraph  异质图
         The heterogeneous graph.
-    category : str
+    category : str  哪个类型的节点要被预测分类，一般是只用一个类型节点的。
         The category(or target) node type need to be predict. In general, we predict only one node type.
-    num_classes : int
+    num_classes : int 最终分类的类别数
         The target node  will be classified into num_classes categories.
-    has_feature : bool
+    has_feature : bool  数据集是否有特征
         Whether the dataset has feature. Default ``False``.
-    multi_label : bool
+    multi_label : bool  一个节点是否会有多个类别（一般都只有一个类别吧）
         Whether the node has multi label. Default ``False``. For now, only HGBn-IMDB has multi-label.
     """
 
     def __init__(self, *args, **kwargs):
         super(NodeClassificationDataset, self).__init__(*args, **kwargs)
-        self.g = None
+        self.g = None  # dgl.heterograph
         self.category = None
         self.num_classes = None
         self.has_feature = False
         self.multi_label = False
-        self.meta_paths_dict =None
+        self.meta_paths_dict =None  # 有些需要元路径的，手工设定好了，形式可以来这里找。
         # self.in_dim = None
 
     def get_labels(self):
         r"""
         The subclass of dataset should overwrite the function. We can get labels of target nodes through it.
+
+        用于获取target nodes的labels，应该是保存在异质图对象中的，把它取出来存到tensor中
 
         Notes
         ------
@@ -56,7 +60,7 @@ class NodeClassificationDataset(BaseDataset):
         
         return
         -------
-        labels : torch.Tensor
+        labels : torch.Tensor  以张量的形式返回
         """
         if 'labels' in self.g.nodes[self.category].data:
             labels = self.g.nodes[self.category].data.pop('labels').long()
@@ -74,6 +78,7 @@ class NodeClassificationDataset(BaseDataset):
         ----------
         validation : bool
             Whether to split dataset. Default ``True``. If it is False, val_idx will be same with train_idx.
+            划分数据集，获得各个数据集中节点的index，包括训练集，验证集和测试集。
 
         We can get idx of train, validation and test through it.
 
@@ -87,25 +92,25 @@ class NodeClassificationDataset(BaseDataset):
             num_nodes = self.g.number_of_nodes(self.category)
             n_test = int(num_nodes * 0.2)
             n_train = num_nodes - n_test
-    
+            # 没定mask，就直接用torch的方法划分数据集，按8：2的比例划分
             train, test = th.utils.data.random_split(range(num_nodes), [n_train, n_test])
             train_idx = th.tensor(train.indices)
             test_idx = th.tensor(test.indices)
-            if validation:
+            if validation:  # 如果需要验证集的话 随机抽取
                 self.logger.dataset_info("Split train into train/valid with the ratio of 8:2 ")
                 random_int = th.randperm(len(train_idx))
                 valid_idx = train_idx[random_int[:len(train_idx) // 5]]
                 train_idx = train_idx[random_int[len(train_idx) // 5:]]
-            else:
+            else:  # 不需要验证集的话，验证集就是训练集
                 self.logger.dataset_info("Set valid set with train set.")
                 valid_idx = train_idx
                 train_idx = train_idx
-        else:
+        else:  # 如果有train mask 那就有test mask  按照这个整理index即可
             train_mask = self.g.nodes[self.category].data.pop('train_mask')
             test_mask = self.g.nodes[self.category].data.pop('test_mask')
             train_idx = th.nonzero(train_mask, as_tuple=False).squeeze()
             test_idx = th.nonzero(test_mask, as_tuple=False).squeeze()
-            if validation:
+            if validation:  # 验证集还是看需不需要啦
                 if 'val_mask' in self.g.nodes[self.category].data:
                     val_mask = self.g.nodes[self.category].data.pop('val_mask')
                     valid_idx = th.nonzero(val_mask, as_tuple=False).squeeze()
@@ -132,6 +137,8 @@ class NodeClassificationDataset(BaseDataset):
 @register_dataset('rdf_node_classification')
 class RDF_NodeClassification(NodeClassificationDataset):
     r"""
+    应该是可以使用的数据集？RDF数据集，是用于节点分类任务的数据集，从dgl中搞来的，然后做了一些处理，可以直接使用啦，一共有四个数据集
+    如果需要使用这些数据集，可能还要再从dgl中查询一下
     The RDF dataset will be used in task *entity classification*.
     Dataset Name : aifb/ mutag/ bgs/ am.
     We download from dgl and process it, refer to
@@ -148,7 +155,7 @@ class RDF_NodeClassification(NodeClassificationDataset):
         self.has_feature = False
 
     def load_RDF_dgl(self, dataset):
-        # load graph data
+        # load graph data 做定性分析的时候是不是会用到这些数据集呢？
         if dataset == 'aifb':
             kg_dataset = AIFBDataset()
         elif dataset == 'mutag':
@@ -170,6 +177,7 @@ class RDF_NodeClassification(NodeClassificationDataset):
 @register_dataset('hin_node_classification')
 class HIN_NodeClassification(NodeClassificationDataset):
     r"""
+    异质信息网络数据集，除了异质网络，分类任务必要的超参数也是在这里进行设置的。
     The HIN dataset are all used in different papers. So we preprocess them and store them as form of dgl.DGLHeteroGraph.
     The dataset name combined with paper name through 4(for).
 
@@ -182,13 +190,13 @@ class HIN_NodeClassification(NodeClassificationDataset):
         self.g, self.category, self.num_classes = self.load_HIN(dataset_name)
 
     def load_HIN(self, name_dataset):
-        if name_dataset == 'demo_graph':
+        if name_dataset == 'demo_graph':  # 自己做的一个demo_graph
             data_path = './openhgnn/dataset/demo_graph.bin'
             category = 'author'
             num_classes = 4
             g, _ = load_graphs(data_path)
             g = g[0].long()
-            self.in_dim = g.ndata['h'][category].shape[1]
+            self.in_dim = g.ndata['h'][category].shape[1]  # 有特征，in_dim是特征维度
         elif name_dataset == 'acm4NSHE':
             dataset = AcademicDataset(name='acm4NSHE', raw_dir='')
             category = 'paper'

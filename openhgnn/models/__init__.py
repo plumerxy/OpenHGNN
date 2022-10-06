@@ -46,15 +46,15 @@ def try_import_model(model):
 
 
 def build_model(model):
-    if isinstance(model, nn.Module):
+    if isinstance(model, nn.Module):  # 如果是torch中的module
         if not hasattr(model, 'build_model_from_args'):
             def build_model_from_args(args, hg):
                 return model
             model.build_model_from_args = build_model_from_args
         return model
-    if not try_import_model(model):
+    if not try_import_model(model):  # 若不在该开源库提供的模型中
         exit(1)
-    return MODEL_REGISTRY[model]
+    return MODEL_REGISTRY[model]  # 从注册的模型中，动态获取该模型类变量
 
 
 SUPPORTED_MODELS = {
