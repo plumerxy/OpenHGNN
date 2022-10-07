@@ -10,6 +10,7 @@ import lime
 import lime.lime_tabular
 import numpy as np
 from openhgnn.GradCAM import GradCAM
+import itertools
 
 __all__ = ['Experiment']
 
@@ -96,23 +97,87 @@ class Experiment(object):
         """ run the experiment """
         self.config.logger = Logger(self.config)
         set_random_seed(self.config.seed)
-        trainerflow = self.specific_trainerflow.get(self.config.model, self.config.task)  # 如果这个model没有特定的trainerflow，默认task就是对应flow的名字啦。
+        trainerflow = self.specific_trainerflow.get(self.config.model,
+                                                    self.config.task)  # 如果这个model没有特定的trainerflow，默认task就是对应flow的名字啦。
         if self.config.hpo_search_space is not None:
             # hyper-parameter search
             hpo_experiment(self.config, trainerflow)
         else:
             # ------- 训练部分 -------- #
-            flow = build_flow(self.config, trainerflow)  # 所有可用的trainerflow类会被注册到一个字典中，根据config所设定的flow名，构造一个相应的trainerflow对象。
+            flow = build_flow(self.config,
+                              trainerflow)  # 所有可用的trainerflow类会被注册到一个字典中，根据config所设定的flow名，构造一个相应的trainerflow对象。
             # result = flow.train()  # 训练一个分类器
             flow.model = torch.load("gtn.pth")
             # ------- lime元路径解释 ------ #
-            # self.metapath_interpret_lime(flow)
+            self.metapath_interpret_lime(flow)
             # ------- grad-cam元路径解释 ------ #
-            gc = GradCAM(flow.model, "linear2")  # grad-cam对象
-            gc.grad_cam(flow)
-
-
+            # gc = GradCAM(flow.model, "linear2")  # grad-cam对象
+            # gc.grad_cam(flow)
+            # ------- GTN的权重 ----------- #
+            # metapath, metapath_weight = self.gtn_metapath_weight(flow)
+            print("?")
             # return result
+    def gtn_metapath_weight(self, flow):
+        """ GTN 的具体元路径语义 """
+        # y_pred = flow.model(flow.hg, flow.model.input_feature())[flow.category][
+        #     flow.train_idx].detach().numpy()  # 训练集的分类结果yc
+        etypes_dict = flow.hg.canonical_etypes.copy()  # 边类型
+        etypes_dict.append(('', '', ''))
+        conv_weights = []  # conv 的权重
+        for i in range(flow.model.num_layers):
+            conv_weights.append(flow.model.layers[i].conv1.filter.detach().numpy().T)
+            if i == 0:
+                conv_weights.append(flow.model.layers[i].conv2.filter.detach().numpy().T)
+        metapath_weights = []  # 记录有效元路径的权重
+        metapath = []  # 记录有效元路径
+        for i, wi in enumerate(conv_weights[0]):
+            for j, wj in enumerate(conv_weights[1]):
+                for k, wk in enumerate(conv_weights[2]):
+                    if (etypes_dict[i][2] == etypes_dict[j][0]) and (etypes_dict[j][2] == etypes_dict[k][0]):
+                        str_m = etypes_dict[i][1] + '-' + etypes_dict[j][2] + '-' + etypes_dict[k][2]
+                        if str_m in metapath:
+                            metapath_weights[self.index_metapath(str_m, metapath)] += wi * wj * wk
+                        else:
+                            metapath.append(str_m)
+                            metapath_weights.append(wi * wj * wk)
+                    elif (etypes_dict[i][0] == '') and (etypes_dict[j][2] == etypes_dict[k][0]):
+                        str_m = etypes_dict[j][1] + '-' + etypes_dict[k][2]
+                        if str_m in metapath:
+                            metapath_weights[self.index_metapath(str_m, metapath)] += wi * wj * wk
+                        else:
+                            metapath.append(str_m)
+                            metapath_weights.append(wi * wj * wk)
+                    elif (etypes_dict[j][0] == '') and (etypes_dict[i][2] == etypes_dict[k][0]):
+                        str_m = etypes_dict[i][1] + '-' + etypes_dict[k][2]
+                        if str_m in metapath:
+                            metapath_weights[self.index_metapath(str_m, metapath)] += wi * wj * wk
+                        else:
+                            metapath.append(str_m)
+                            metapath_weights.append(wi * wj * wk)
+                    elif (etypes_dict[k][0] == '') and (etypes_dict[i][2] == etypes_dict[j][0]):
+                        str_m = etypes_dict[i][1] + '-' + etypes_dict[j][2]
+                        if str_m in metapath:
+                            metapath_weights[self.index_metapath(str_m, metapath)] += wi * wj * wk
+                        else:
+                            metapath.append(str_m)
+                            metapath_weights.append(wi * wj * wk)
+        del metapath[len(metapath)-1]
+        del metapath_weights[len(metapath)-1]
+
+        """保存到csv"""
+        # import pandas as pd
+        # import openpyxl
+        # dt = pd.DataFrame(metapath_weights, index=metapath)
+        # dt.to_excel("meta_path.xlsx")
+        return metapath, metapath_weights
+
+
+    def index_metapath(self, str_m, metapath):
+        """查找重复的元路径，返回index"""
+        for i, str in enumerate(metapath):
+            if str_m == str:
+                return i
+        return -1
 
     def metapath_interpret_lime(self, flow):
         # ------- 解释部分  lime v1.0 -------- #
@@ -130,7 +195,7 @@ class Experiment(object):
         # m1 = 原始正类概率-影响最大元路径置零后正类概率   m2 = 原始正类概率-影响最小元路径置零后正类概率
         m1_list = []
         m2_list = []
-        for test_idx in range(20):
+        for test_idx in range(200):
             print("----------------------")
             print("test id: " + str(test_idx))
             exp = explainer.explain_instance(test[test_idx], flow.model.predict_lime,
@@ -179,7 +244,6 @@ class Experiment(object):
         print("m1 metric: " + str(m1))
         print("m2 metric: " + str(m2))
 
-
     def __repr__(self):
         basic_info = '------------------------------------------------------------------------------\n' \
                      ' Basic setup of this experiment: \n' \
@@ -195,4 +259,3 @@ class Experiment(object):
             if '__' not in attr and attr not in self.immutable_params:
                 params_info += '{}: {}\n'.format(attr, getattr(self.config, attr))
         return basic_info + params_info
-

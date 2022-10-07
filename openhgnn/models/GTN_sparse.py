@@ -83,6 +83,7 @@ class GTN(BaseModel):
         self.A = None
         self.h = None
         self.X_ = None  # 用于存储GCN生成的基于元路径的embedding
+        self.conv_weight = []  # 用于图卷积层中，存储各边类型同质图的权重
 
     def normalization(self, H):
         norm_H = []
@@ -217,6 +218,7 @@ class GTConv(nn.Module):
         self.weight = nn.Parameter(th.Tensor(out_channels, in_channels))
         self.softmax_flag = softmax_flag
         self.reset_parameters()
+        self.filter = None
 
     def reset_parameters(self):
         nn.init.normal_(self.weight, std=0.01)
@@ -234,4 +236,5 @@ class GTConv(nn.Module):
                 A[j].edata['w_sum'] = g.edata['w'] * Filter[i][j]  # 对每个类型边矩阵，赋予边权重
             sum_g = dgl.adj_sum_graph(A, 'w_sum')
             results.append(sum_g)
+        self.filter = Filter
         return results
