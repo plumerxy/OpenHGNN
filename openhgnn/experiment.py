@@ -10,6 +10,7 @@ import lime
 import lime.lime_tabular
 import numpy as np
 from openhgnn.GradCAM import GradCAM
+from openhgnn.GradCAM import Test
 import itertools
 
 __all__ = ['Experiment']
@@ -109,16 +110,18 @@ class Experiment(object):
             # result = flow.train()  # 训练一个分类器
             flow.model = torch.load("gtn.pth")
             # ------- lime元路径解释 ------ #
-            self.metapath_interpret_lime(flow)
-            # ------- grad-cam元路径解释 ------ #
-            # gc = GradCAM(flow.model, "linear2")  # grad-cam对象
-            # gc.grad_cam(flow)
+            # self.metapath_interpret_lime(flow)
+            # ------- grad-cam元路径解释 ------
+            gc = GradCAM(flow.model, "linear1")
+            for i in range(1):
+                weight, feature = gc.grad_cam(flow, i)
+                print(weight)
             # ------- GTN的权重 ----------- #
             # metapath, metapath_weight = self.gtn_metapath_weight(flow)
             print("?")
             # return result
     def gtn_metapath_weight(self, flow):
-        """ GTN 的具体元路径语义 """
+        """ GTN生成的每个同质图的具体元路径权重计算"""
         # y_pred = flow.model(flow.hg, flow.model.input_feature())[flow.category][
         #     flow.train_idx].detach().numpy()  # 训练集的分类结果yc
         etypes_dict = flow.hg.canonical_etypes.copy()  # 边类型
