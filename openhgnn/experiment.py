@@ -10,6 +10,8 @@ import lime
 import lime.lime_tabular
 import numpy as np
 from openhgnn.GradCAM import GradCAM
+from openhgnn.GradCAM import Lime
+from openhgnn.GradCAM import InterpretEvaluator
 from openhgnn.GradCAM import Test
 import itertools
 
@@ -110,15 +112,24 @@ class Experiment(object):
             # result = flow.train()  # 训练一个分类器
             flow.model = torch.load("gtn.pth")
             # ------- lime元路径解释 ------ #
-            # self.metapath_interpret_lime(flow)
+            # exp = self.metapath_interpret_lime(flow)
+            lm = Lime(flow)  # 初始化lime explainer
+            w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
+            eva = InterpretEvaluator(lm)  # 初始化可解释性评估器
+            m1, m2 = eva.test_metrics(200)  # 计算指标
+            print("-------------lime for 200 samples-----------")
+            print("m1 metric: " + str(m1))
+            print("m2 metric: " + str(m2))
             # ------- grad-cam元路径解释 ------
-            gc = GradCAM(flow.model, "linear1")
-            for i in range(1):
-                weight, feature = gc.grad_cam(flow, i)
-                print(weight)
+            gc = GradCAM(flow, flow.model, "linear1")
+            w_pos, w_neg = gc.gen_exp(0)
+            eva = InterpretEvaluator(gc)
+            m1, m2 = eva.test_metrics(200)
+            print("-------------grad-cam for 200 samples-----------")
+            print("m1 metric: " + str(m1))
+            print("m2 metric: " + str(m2))
             # ------- GTN的权重 ----------- #
             # metapath, metapath_weight = self.gtn_metapath_weight(flow)
-            print("?")
             # return result
     def gtn_metapath_weight(self, flow):
         """ GTN生成的每个同质图的具体元路径权重计算"""
@@ -182,70 +193,7 @@ class Experiment(object):
                 return i
         return -1
 
-    def metapath_interpret_lime(self, flow):
-        # ------- 解释部分  lime v1.0 -------- #
-        """数据处理"""
-        # y_pred = flow.model(flow.hg, flow.model.input_feature())[flow.category][flow.train_idx].detach().numpy()  # 训练集的分类结果yc
-        train = flow.model.X_[flow.train_idx].detach().numpy()  # 训练集中 GCN的输出embedding
-        test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
-        feature_names = ["mp" + str(channel) + '_' + str(dim) for channel in range(1, flow.args.num_channels + 1) for
-                         dim in range(1, flow.args.hidden_dim + 1)]  # embedding中每个特征的名称
-        class_names = ["class" + str(i) for i in range(flow.num_classes)]  # 类别名称
-        """解释生成"""
-        explainer = lime.lime_tabular.LimeTabularExplainer(train, feature_names=feature_names, class_names=class_names,
-                                                           discretize_continuous=False)  # lime解释器
-        # print(flow.model.predict_lime(test))
-        # m1 = 原始正类概率-影响最大元路径置零后正类概率   m2 = 原始正类概率-影响最小元路径置零后正类概率
-        m1_list = []
-        m2_list = []
-        for test_idx in range(200):
-            print("----------------------")
-            print("test id: " + str(test_idx))
-            exp = explainer.explain_instance(test[test_idx], flow.model.predict_lime,
-                                             num_features=flow.args.hidden_dim * flow.args.num_channels,
-                                             top_labels=1)  # 生成单个实例的解释
-            local_exp = exp.local_exp[list(exp.local_exp.keys())[0]]  # 特征重要性列表
-            local_exp_sum_pos = [0 for i in range(flow.args.num_channels)]  # 为每个元路径计算正类的总重要性
-            local_exp_sum_neg = [0 for i in range(flow.args.num_channels)]  # 负类的重要性
-            for i, attr in local_exp:
-                if attr > 0:
-                    local_exp_sum_pos[int(i / flow.args.hidden_dim)] = local_exp_sum_pos[
-                                                                           int(i / flow.args.hidden_dim)] + attr
-                else:
-                    local_exp_sum_neg[int(i / flow.args.hidden_dim)] = local_exp_sum_neg[
-                                                                           int(i / flow.args.hidden_dim)] + attr
-            """处理解释 计算一个简单指标"""
-            prob = flow.model.predict_lime(test[test_idx].reshape(1, -1))
-            print("init prob: " + str(prob))
-            # 影响最大的元路径embedding直接置零
-            max_pos_index = local_exp_sum_pos.index(max(local_exp_sum_pos))
-            max_neg_index = local_exp_sum_neg.index(min(local_exp_sum_neg))
-            test_new_pos = test[test_idx].copy()
-            test_new_pos[max_pos_index * 128: (max_pos_index + 1) * 128] = 0
-            test_new_neg = test[test_idx].copy()
-            test_new_neg[max_neg_index * 128: (max_neg_index + 1) * 128] = 0
-            prob_new_pos = flow.model.predict_lime(test_new_pos.reshape(1, -1))
-            prob_new_neg = flow.model.predict_lime(test_new_neg.reshape(1, -1))
-            print("delete the most important metapath for positive class: " + str(prob_new_pos))
-            print("delete the most important metapath for negative class: " + str(prob_new_neg))
-            m1_list.append(np.max(prob, axis=1) - prob_new_pos[0][np.argmax(prob)])  # m1指标计算
-            # 影响最小的元路径embedding直接置零
-            min_pos_index = local_exp_sum_pos.index(min(local_exp_sum_pos))
-            min_neg_index = local_exp_sum_neg.index(max(local_exp_sum_neg))
-            test_new_pos = test[test_idx].copy()
-            test_new_pos[min_pos_index * 128: (min_pos_index + 1) * 128] = 0
-            test_new_neg = test[test_idx].copy()
-            test_new_neg[min_neg_index * 128: (min_neg_index + 1) * 128] = 0
-            prob_new_pos = flow.model.predict_lime(test_new_pos.reshape(1, -1))
-            prob_new_neg = flow.model.predict_lime(test_new_neg.reshape(1, -1))
-            print("delete the less important metapath for positive class: " + str(prob_new_pos))
-            print("delete the less important metapath for negative class: " + str(prob_new_neg))
-            m2_list.append(np.max(prob, axis=1) - prob_new_pos[0][np.argmax(prob)])  # m2指标计算
-        m1 = np.mean(m1_list)
-        m2 = np.mean(m2_list)
-        print("-------------")
-        print("m1 metric: " + str(m1))
-        print("m2 metric: " + str(m2))
+
 
     def __repr__(self):
         basic_info = '------------------------------------------------------------------------------\n' \
