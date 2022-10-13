@@ -7,6 +7,56 @@ import lime.lime_tabular
 from tqdm import tqdm
 
 
+class Saliency(object):
+    """
+    计算每个基于元路径的同质图的节点重要性
+    """
+    def __init__(self, flow, layer_name):
+        self.flow = flow
+        self.net = flow.model
+        self.layer_name = layer_name
+        self.feature = []
+        self.gradient = []
+        self.net.eval()
+        self.handlers = []
+        self._register_hook()
+
+        self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
+
+    def _forward_hook_func(self, model, input, output):
+        self.feature.append(input)
+
+    def _backward_hook_func(self, model, input_grad, output_grad):
+        self.gradient.append(input_grad)
+
+    def _register_hook(self):
+        for (name, module) in self.net.named_modules():
+            if name == self.layer_name:  # linear1
+                self.handlers.append(module.register_forward_hook(self._forward_hook_func))
+                self.handlers.append(module.register_backward_hook(self._backward_hook_func))
+
+    def gen_exp(self, idx):
+        """
+        为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        Parameters
+        ----------
+        idx: 第idx个样本
+
+        Returns a list for 每个通道的节点重要性
+        -------
+
+        """
+        self.net.zero_grad()
+        output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][idx]  # 测试集中第0个节点的分类score
+        index = np.argmax(output.data.numpy())  # 得分最高类别的index
+        target = output[index]  # 对该类别的得分求梯度
+        target.backward()
+        weight = 0
+        feature = 0
+
+        return divide_weights(weight, self.flow.args.hidden_dim, cal_type="mean")
+
+
 def divide_weights(weights, hidden_dim, cal_type="sum"):
     """
     将node embedding全部分量的重要性，整合为每个同质图的权重
