@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.functional import normalize
 import lime
 import lime.lime_tabular
 from tqdm import tqdm
@@ -10,30 +11,30 @@ from tqdm import tqdm
 class Saliency(object):
     """
     计算每个基于元路径的同质图的节点重要性
+    从feature_name中获得待计算梯度的特征矩阵变量，并用hook函数绑定获取中间梯度
     """
-    def __init__(self, flow, layer_name):
+
+    def __init__(self, flow, feature_name):
         self.flow = flow
         self.net = flow.model
-        self.layer_name = layer_name
+        self.feature_name = feature_name  # 要求梯度的变量名
         self.feature = []
         self.gradient = []
         self.net.eval()
         self.handlers = []
+
+        self.output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx]
         self._register_hook()
 
-        self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
-
-    def _forward_hook_func(self, model, input, output):
-        self.feature.append(input)
-
-    def _backward_hook_func(self, model, input_grad, output_grad):
-        self.gradient.append(input_grad)
+    def _hook_func(self, grad):
+        self.gradient.append(grad)
 
     def _register_hook(self):
-        for (name, module) in self.net.named_modules():
-            if name == self.layer_name:  # linear1
-                self.handlers.append(module.register_forward_hook(self._forward_hook_func))
-                self.handlers.append(module.register_backward_hook(self._backward_hook_func))
+        for name, var in vars(self.net).items():
+            if name == self.feature_name:
+                self.feature = var
+        for i in range(len(self.feature)):
+            self.handlers.append(self.feature[i].register_hook(self._hook_func))
 
     def gen_exp(self, idx):
         """
@@ -42,19 +43,33 @@ class Saliency(object):
         ----------
         idx: 第idx个样本
 
-        Returns a list for 每个通道的节点重要性
+        Returns 具有梯度的节点的index，以及相应的重要性。
+                idx_list, grad_list  shape  ---> (num_channels, num_important_nodes)
         -------
 
         """
         self.net.zero_grad()
-        output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][idx]  # 测试集中第0个节点的分类score
+        self.gradient = []
+        # self.handlers = []
+
+        # output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][
+            # idx]  # 测试集中第0个节点的分类score
+        output = self.output[idx]
         index = np.argmax(output.data.numpy())  # 得分最高类别的index
         target = output[index]  # 对该类别的得分求梯度
-        target.backward()
-        weight = 0
-        feature = 0
+        # self._register_hook()
+        target.backward(retain_graph=True)
+        grad_list = []
+        idx_list = []
+        for grad in self.gradient:
+            nonzeroindex = torch.nonzero(grad.sum(axis=1)).view(-1)
+            idx_list.append(nonzeroindex)
+            grad_list.append(grad[nonzeroindex].sum(axis=1))
+        grad_list = torch.stack(grad_list)
+        idx_list = torch.stack(idx_list)
+        grad_list = normalize(grad_list, p=2.0, dim=1)  # 这个获得的就是正则化后的节点重要性
 
-        return divide_weights(weight, self.flow.args.hidden_dim, cal_type="mean")
+        return idx_list.detach().numpy(), grad_list.detach().numpy()
 
 
 def divide_weights(weights, hidden_dim, cal_type="sum"):
@@ -89,6 +104,7 @@ class GradCAM(object):
     """
     类似grad cam的方法计算每个基于元路径的node embedding的重要性
     """
+
     def __init__(self, flow, net, layer_name):
         self.flow = flow
         self.net = net
@@ -128,7 +144,8 @@ class GradCAM(object):
 
         """
         self.net.zero_grad()
-        output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][idx]  # 测试集中第0个节点的分类score
+        output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][
+            idx]  # 测试集中第0个节点的分类score
         index = np.argmax(output.data.numpy())  # 得分最高类别的index
         target = output[index]  # 对该类别的得分求梯度
         target.backward()
@@ -142,6 +159,7 @@ class Lime(object):
     """
     通过lime的方法，为每个基于元路径的node embedding计算重要性
     """
+
     def __init__(self, flow):
         """
         处理数据集，生成explainer
@@ -185,6 +203,7 @@ class InterpretEvaluator(object):
     """
     测试解释方法的指标
     """
+
     def __init__(self, interpreter):
         """
         要求interpreter里面要包含flow和test 以便于获取测试时候的参数
@@ -232,13 +251,15 @@ class InterpretEvaluator(object):
 class Test(nn.Module):
     def __init__(self):
         super(Test, self).__init__()
-        self.linear1 = nn.Linear(1024, 128)
-        self.linear2 = nn.Linear(128, 4)
+        self.conv1 = GraphConv(10, 8, norm='both', weight=True, bias=True)
+        self.conv2 = GraphConv(8, 4, norm='both', weight=True, bias=True)
+        self.linear1 = nn.Linear(4, 2)
 
-    def forward(self, X):
-        X = self.linear1(X)
-        X = F.relu(X)
-        y = self.linear2(X)
+    def forward(self, feat, g):
+        e1 = self.conv1(g, feat)
+        e2 = self.conv2(g, e1)
+        y = self.linear1(e2)
+        feat.register_hook(self.hook_func)
         return y
 
     def forward_hook_func(self, model, input, output):
@@ -249,16 +270,26 @@ class Test(nn.Module):
         self.input_grad = input_grad
         self.output_grad = output_grad
 
+    def hook_func(self, grad):
+        self.grad = grad
+
 
 if __name__ == "__main__":
-    X = torch.ones(1, 1024, requires_grad=True)
+    import dgl
+    import numpy as np
+    import torch as th
+    from dgl.nn import GraphConv
+
+    g = dgl.graph(([0, 1, 2, 3, 2, 5], [1, 2, 3, 4, 0, 3]))
+    g = dgl.add_self_loop(g)
+    feat = th.rand(6, 10, requires_grad=True)
     model = Test()
     model.eval()
     model.zero_grad()
-    model.linear1.register_forward_hook(model.forward_hook_func)
-    model.linear1.register_backward_hook(model.backward_hook_func)
-    y = model(X)
-    y_scalar = y[0][1]
+    model.conv1.register_forward_hook(model.forward_hook_func)
+    model.conv1.register_backward_hook(model.backward_hook_func)
+    y = model(feat, g)
+    y_scalar = y[4][0]
     y_scalar.backward()
     print("done")
 

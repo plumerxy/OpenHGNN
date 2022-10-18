@@ -44,6 +44,7 @@ class GTN(BaseModel):
             If True, the identity matrix will be added to relation matrix set.
 
     """
+
     @classmethod
     def build_model_from_args(cls, args, hg):
         if args.identity:
@@ -67,7 +68,7 @@ class GTN(BaseModel):
         self.is_norm = norm
         self.category = category
         self.identity = identity  # 好像是，生成元路径的时候，要不要乘同一矩阵   按照GTN的概念，那多了一个类型的同质图，确实是多了一种类型的边，所以前面边数量要加一
-                                    # 总之就是GTN模型需要用到的各种参数
+        # 总之就是GTN模型需要用到的各种参数
         layers = []
         for i in range(num_layers):
             if i == 0:
@@ -75,10 +76,12 @@ class GTN(BaseModel):
             else:
                 layers.append(GTLayer(num_edge_type, num_channels, first=False))
         self.layers = nn.ModuleList(layers)  # 以列表的形式保持多个子模块（GTN layer模块）
-        self.gcn = GraphConv(in_feats=self.in_dim, out_feats=hidden_dim, norm='none', activation=F.relu)  # 同质图GCN图神经网络  这个GraphConv应该是只有一个GCNlayer
+        self.gcn = GraphConv(in_feats=self.in_dim, out_feats=hidden_dim, norm='none',
+                             activation=F.relu)  # 同质图GCN图神经网络  这个GraphConv应该是只有一个GCNlayer
         self.norm = EdgeWeightNorm(norm='right')  # 给邻接矩阵做正则化用的
-        self.linear1 = nn.Linear(self.hidden_dim * self.num_channels, self.hidden_dim)  # embedding拼接起来，输出是一个embedding的大小
-        self.linear2 = nn.Linear(self.hidden_dim, self.num_class)   # 再来一个线性层进行分类  （linear层应该是没有激活函数的）
+        self.linear1 = nn.Linear(self.hidden_dim * self.num_channels,
+                                 self.hidden_dim)  # embedding拼接起来，输出是一个embedding的大小
+        self.linear2 = nn.Linear(self.hidden_dim, self.num_class)  # 再来一个线性层进行分类  （linear层应该是没有激活函数的）
         self.category_idx = None
         self.A = None
         self.h = None
@@ -111,6 +114,49 @@ class GTN(BaseModel):
         probs = torch.nn.functional.softmax(logits, dim=1)
         return probs.detach().numpy()
 
+    def hook_func(self, grad):
+        self.grad.append(grad)
+
+    # def forward(self, hg, h):
+    #     with hg.local_scope():  # 这个意思是，对hg的数据的操作，都限制在这个局部内，当离开这个局部，这些改变没有发生。
+    #         hg.ndata['h'] = h
+    #         # * =============== Extract edges in original graph  从原始图中提取边的过程 ================
+    #         if self.category_idx is None:  # 这个一开始就是空的
+    #             self.A, h, self.category_idx = transform_relation_graph_list(hg, category=self.category,
+    #                                                                          identity=self.identity)
+    #             # A是所有同质图的列表，h是所有节点的特征，category_idx是预测要用的节点的相应idx
+    #         else:
+    #             g = dgl.to_homogeneous(hg, ndata='h')
+    #             h = g.ndata['h']
+    #         # X_ = self.gcn(g, self.h)
+    #         A = self.A
+    #         # * =============== Get new graph structure  GTN的部分 GTLayers ================
+    #         for i in range(self.num_layers):  # num_layers是GTlayer的层数
+    #             if i == 0:
+    #                 H, W = self.layers[i](A)  # W是conv层的相应权重，H是新生成图的list，一共有channel个
+    #             else:
+    #                 H, W = self.layers[i](A, H)
+    #             if self.is_norm == True:
+    #                 H = self.normalization(H)  # 做正则化，其实对w_sum做正则化就是对邻接矩阵的正则化，加权矩阵的权重就是写在邻接矩阵中的嘛
+    #             # Ws.append(W)
+    #         # * =============== GCN Encoder  然后就该往GCN里面输入了 ================
+    #         for i in range(self.num_channels):  # 对于每个channel分别操作
+    #             g = dgl.remove_self_loop(H[i])  # 去除图中指向节点自己的边
+    #             edge_weight = g.edata['w_sum']  # 获取每个边的权重
+    #             g = dgl.add_self_loop(g)  # 又重新把指向自己的边加上了？？？GCN应该是要用到？
+    #             edge_weight = th.cat((edge_weight, th.full((g.number_of_nodes(),), 1, device=g.device)))  # 把新加上的这些边的权重添加到edge_weight中，这些权重均为1
+    #             edge_weight = self.norm(g, edge_weight)  # 又把图正则化了一下
+    #             if i == 0:
+    #                 X_ = self.gcn(g, h, edge_weight=edge_weight)  # 带入GCN 开始学习
+    #             else:
+    #                 X_ = th.cat((X_, self.gcn(g, h, edge_weight=edge_weight)), dim=1)  # 在这里直接把所有的embedding拼接起来了 不是最后才拼接的
+    #         self.X_ = X_[self.category_idx]  # 加一句，获取待预测节点的embedding输入 1x1024(8x128)
+    #         X_ = self.linear1(X_)
+    #         X_ = F.relu(X_)
+    #         y = self.linear2(X_)
+    #         h.register_hook(self.hook_func)
+    #         return {self.category: y[self.category_idx]}  # 挑出待预测类型节点的预测结果  作为一个字典返回
+
     def forward(self, hg, h):
         with hg.local_scope():  # 这个意思是，对hg的数据的操作，都限制在这个局部内，当离开这个局部，这些改变没有发生。
             hg.ndata['h'] = h
@@ -134,16 +180,21 @@ class GTN(BaseModel):
                     H = self.normalization(H)  # 做正则化，其实对w_sum做正则化就是对邻接矩阵的正则化，加权矩阵的权重就是写在邻接矩阵中的嘛
                 # Ws.append(W)
             # * =============== GCN Encoder  然后就该往GCN里面输入了 ================
+            self.h_list = []
+            for i in range(self.num_channels):
+                self.h_list.append(h.clone())
             for i in range(self.num_channels):  # 对于每个channel分别操作
                 g = dgl.remove_self_loop(H[i])  # 去除图中指向节点自己的边
                 edge_weight = g.edata['w_sum']  # 获取每个边的权重
                 g = dgl.add_self_loop(g)  # 又重新把指向自己的边加上了？？？GCN应该是要用到？
-                edge_weight = th.cat((edge_weight, th.full((g.number_of_nodes(),), 1, device=g.device)))  # 把新加上的这些边的权重添加到edge_weight中，这些权重均为1
+                edge_weight = th.cat((edge_weight, th.full((g.number_of_nodes(),), 1,
+                                                           device=g.device)))  # 把新加上的这些边的权重添加到edge_weight中，这些权重均为1
                 edge_weight = self.norm(g, edge_weight)  # 又把图正则化了一下
                 if i == 0:
-                    X_ = self.gcn(g, h, edge_weight=edge_weight)  # 带入GCN 开始学习
+                    X_ = self.gcn(g, self.h_list[i], edge_weight=edge_weight)  # 带入GCN 开始学习
                 else:
-                    X_ = th.cat((X_, self.gcn(g, h, edge_weight=edge_weight)), dim=1)  # 在这里直接把所有的embedding拼接起来了 不是最后才拼接的
+                    X_ = th.cat((X_, self.gcn(g, self.h_list[i], edge_weight=edge_weight)),
+                                dim=1)  # 在这里直接把所有的embedding拼接起来了 不是最后才拼接的
             self.X_ = X_[self.category_idx]  # 加一句，获取待预测节点的embedding输入 1x1024(8x128)
             X_ = self.linear1(X_)
             X_ = F.relu(X_)
@@ -173,6 +224,7 @@ class GTLayer(nn.Module):
                 If true, the first combination adjacency matrix multiply the combination adjacency matrix.
 
     """
+
     def __init__(self, in_channels, out_channels, first=True):
         super(GTLayer, self).__init__()
         self.in_channels = in_channels
@@ -188,7 +240,8 @@ class GTLayer(nn.Module):
         if self.first:
             result_A = self.conv1(A)  # 计算一个用各种类型边加权出来的图
             result_B = self.conv2(A)  # 计算一个用各种类型边加权出来的图
-            W = [(F.softmax(self.conv1.weight, dim=1)).detach(), (F.softmax(self.conv2.weight, dim=1)).detach()]  # 把卷积时候用到的权重都保存下来
+            W = [(F.softmax(self.conv1.weight, dim=1)).detach(),
+                 (F.softmax(self.conv2.weight, dim=1)).detach()]  # 把卷积时候用到的权重都保存下来
             # detach()函数用于剥离梯度，也是tensor，数值一样，但是没有梯度了
         else:
             result_A = H_
