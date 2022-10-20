@@ -15,6 +15,7 @@ from openhgnn.Interpret import Lime
 from openhgnn.Interpret import InterpretEvaluator
 from openhgnn.Interpret import Saliency
 import itertools
+from .interpret_utils import node_distribution_plot
 
 __all__ = ['Experiment']
 
@@ -107,33 +108,43 @@ class Experiment(object):
             # hyper-parameter search
             hpo_experiment(self.config, trainerflow)
         else:
-            # ------- 训练部分 -------- #
+            """ GNN模型训练部分 """
             flow = build_flow(self.config,
                               trainerflow)  # 所有可用的trainerflow类会被注册到一个字典中，根据config所设定的flow名，构造一个相应的trainerflow对象。
             # result = flow.train()  # 训练一个分类器
             flow.model = torch.load("gtn.pth")
-            """test"""
+            # output = flow.model(flow.hg, flow.model.input_feature())
+            """ 可解释性 """
+            # ------- 节点重要性 ------ #
             sl = Saliency(flow, "h_list")
-            idx, grad = sl.gen_exp(0)
-            idx1, grad1 = sl.gen_exp(1)
-            idx2, grad2 = sl.gen_exp(2)
-            # ------- lime元路径解释 ------ #
-            # exp = self.metapath_interpret_lime(flow)
-            lm = Lime(flow)  # 初始化lime explainer
-            w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
-            eva = InterpretEvaluator(lm)  # 初始化可解释性评估器
-            m1, m2 = eva.test_metrics(2000)  # 计算指标
-            print("-------------lime for 2000 samples-----------")
-            print("m1 metric: " + str(m1))
-            print("m2 metric: " + str(m2))
-            # ------- grad-cam元路径解释 ------
-            gc = GradCAM(flow, flow.model, "linear1")
-            w_pos, w_neg = gc.gen_exp(0)
-            eva = InterpretEvaluator(gc)
-            m1, m2 = eva.test_metrics(2000)
-            print("-------------grad-cam for 2000 samples-----------")
-            print("m1 metric: " + str(m1))
-            print("m2 metric: " + str(m2))
+            # tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+            eva = InterpretEvaluator(sl)
+            print("----------------node importance evaluation----------------")
+            m_tot_node_importance = eva.tot_node_importance(500)
+            print("total prob diff: %.5f" % m_tot_node_importance)
+            m1, m2 = eva.node_importance_metric(500)
+            print("prob diff: %s" % str(m1))
+            print("lime importance diff: %s" % str(m2))
+
+            # # ------- lime元路径解释 ------ #
+            # # exp = self.metapath_interpret_lime(flow)
+            # lm = Lime(flow)  # 初始化lime explainer
+            # w_pos, w_neg = lm.gen_exp(10)  # 查看第i个测试用例的正负权重
+            # eva = InterpretEvaluator(lm)  # 初始化可解释性评估器
+            # m1, m2 = eva.test_metrics(1)  # 计算指标
+            # print("-------------lime for 2000 samples-----------")
+            # print("m1 metric: " + str(m1))
+            # print("m2 metric: " + str(m2))
+            #
+            # # ------- grad-cam元路径解释 ------
+            # gc = GradCAM(flow, flow.model, "linear1")
+            # w_pos, w_neg = gc.gen_exp(10)
+            # eva = InterpretEvaluator(gc)
+            # m1, m2 = eva.test_metrics(1)
+            # print("-------------grad-cam for 2000 samples-----------")
+            # print("m1 metric: " + str(m1))
+            # print("m2 metric: " + str(m2))
+
             # ------- GTN的权重 ----------- #
             # metapath, metapath_weight = self.gtn_metapath_weight(flow)
             # return result

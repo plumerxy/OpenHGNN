@@ -22,6 +22,7 @@ class Saliency(object):
         self.gradient = []
         self.net.eval()
         self.handlers = []
+        self.test = None
 
         self.output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx]
         self._register_hook()
@@ -39,12 +40,14 @@ class Saliency(object):
     def gen_exp(self, idx):
         """
         为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        包含总节点重要性和不同同质图的节点重要性
         Parameters
         ----------
         idx: 第idx个样本
 
         Returns 具有梯度的节点的index，以及相应的重要性。
-                idx_list, grad_list  shape  ---> (num_channels, num_important_nodes)
+                nonzeroindex, grad_sum:   shape ---> num_important_nodes
+                idx_list, grad_list:  shape  ---> (num_channels, num_important_nodes)
         -------
 
         """
@@ -53,7 +56,7 @@ class Saliency(object):
         # self.handlers = []
 
         # output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][
-            # idx]  # 测试集中第0个节点的分类score
+        # idx]  # 测试集中第0个节点的分类score
         output = self.output[idx]
         index = np.argmax(output.data.numpy())  # 得分最高类别的index
         target = output[index]  # 对该类别的得分求梯度
@@ -61,15 +64,21 @@ class Saliency(object):
         target.backward(retain_graph=True)
         grad_list = []
         idx_list = []
+        grad_sum = torch.zeros_like(self.gradient[0])
         for grad in self.gradient:
             nonzeroindex = torch.nonzero(grad.sum(axis=1)).view(-1)
             idx_list.append(nonzeroindex)
             grad_list.append(grad[nonzeroindex].sum(axis=1))
+            grad_sum = grad_sum + grad
         grad_list = torch.stack(grad_list)
         idx_list = torch.stack(idx_list)
         grad_list = normalize(grad_list, p=2.0, dim=1)  # 这个获得的就是正则化后的节点重要性
 
-        return idx_list.detach().numpy(), grad_list.detach().numpy()
+        nonzeroindex = torch.nonzero(grad_sum.sum(axis=1)).view(-1)
+        grad_sum = grad_sum[nonzeroindex].sum(axis=1).view(1, -1)
+        grad_sum = normalize(grad_sum, p=2.0, dim=1)
+
+        return nonzeroindex.detach().numpy(), grad_sum.detach().numpy(), idx_list.detach().numpy(), grad_list.detach().numpy()
 
 
 def divide_weights(weights, hidden_dim, cal_type="sum"):
@@ -97,6 +106,8 @@ def divide_weights(weights, hidden_dim, cal_type="sum"):
         neg_w = np.mean(neg_w.reshape((-1, hidden_dim)), axis=1)
     else:
         print("error cal type.")
+    pos_w = normalize(torch.tensor(pos_w).view(1, -1), p=2.0).numpy()
+    neg_w = normalize(torch.tensor(neg_w).view(1, -1), p=2.0).numpy()
     return pos_w, neg_w
 
 
@@ -113,9 +124,10 @@ class GradCAM(object):
         self.gradient = []
         self.net.eval()
         self.handlers = []
-        self._register_hook()
 
+        y_pred = flow.model(flow.hg, flow.model.input_feature())
         self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
+        self._register_hook()
 
     def _forward_hook_func(self, model, input, output):
         # input就是node embedding 元组只有一个tensor--(num_node x 1024) 从中取出所有预测类型节点
@@ -160,12 +172,15 @@ class Lime(object):
     通过lime的方法，为每个基于元路径的node embedding计算重要性
     """
 
-    def __init__(self, flow):
+    def __init__(self, flow, **kwargs):
         """
         处理数据集，生成explainer
         flow为对应的trainer flow
         """
-        # y_pred = flow.model(flow.hg, flow.model.input_feature())[flow.category][flow.train_idx].detach().numpy()  # 训练集的分类结果yc
+        if len(kwargs) != 0:
+            y_pred = flow.model(flow.hg, flow.model.input_feature(), mode=kwargs['mode'], channel=kwargs['channel'], idx=kwargs['idx'])
+        else:
+            y_pred = flow.model(flow.hg, flow.model.input_feature())
         train = flow.model.X_[flow.train_idx].detach().numpy()  # 训练集中 GCN的输出embedding
         test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
         feature_names = ["mp" + str(channel) + '_' + str(dim) for channel in range(1, flow.args.num_channels + 1) for
@@ -221,7 +236,7 @@ class InterpretEvaluator(object):
         要求interpreter有gen_exp的方法，暂时没有写成继承，如果后期要整合代码，再做基类吧
         Parameters
         ----------
-        counts 利用前多少个sample计算该指标
+        counts: 利用前多少个sample计算该指标
 
         Returns 指标m1和m2, m1是原始概率-最重要元路径覆盖后概率   m2是原始概率-最不重要元路径覆盖后概率
         -------
@@ -246,6 +261,90 @@ class InterpretEvaluator(object):
         m1 = np.mean(m1_list)
         m2 = np.mean(m2_list)
         return m1, m2
+
+    def tot_node_importance(self, counts):
+        """
+        计算总节点重要性的评估指标，将最重要的前5个节点（除样本本身外）的特征全部置零，测量预测概率的改变情况
+        Parameters
+        ----------
+        counts: 利用前多少个sample计算该指标
+
+        Returns metric, 原始概率-置零重要节点后的概率
+        -------
+
+        """
+        metric = []
+        print("calculate total node importance metrics for %s" % self.interpreter.__class__.__name__)
+        for test_idx in tqdm(range(counts)):
+            # 获取待遮节点的index
+            tot_idx, tot_grad, __, __ = self.interpreter.gen_exp(test_idx)  # 获取节点总梯度tot_grad
+            chosen_idx = tot_idx[np.flipud(np.argsort(tot_grad)[0])[:5]]
+            original_idx = self.flow.model.category_idx[self.flow.test_idx[test_idx]].item()  # 测试样本在全部节点中的idx
+            original_inside_idx = np.where(chosen_idx == original_idx)[0]  # 判断待预测节点本身在不在梯度前几中 如果是的话返回其索引
+            if original_inside_idx.size == 1:  # 待预测的节点本身不能被遮掉吧
+                chosen_idx = np.delete(chosen_idx, original_inside_idx)
+            # 遮掉相应节点的特征，置为0
+            h = self.flow.model.input_feature()
+            ntype_dict = {}
+            sum = 0
+            for ntype in self.flow.hg.ntypes:
+                ntype_dict[ntype] = np.arange(sum, sum + self.flow.hg.num_nodes(ntype))
+                sum = sum + self.flow.hg.num_nodes(ntype)
+            for i in chosen_idx:
+                for ntype, index in ntype_dict.items():
+                    if np.argwhere(index == i).size == 1:
+                        h[ntype][np.argwhere(index == i)] = 0
+            # 计算指标
+            output_ori = \
+                self.interpreter.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][
+                    self.flow.test_idx][test_idx]
+            prob_ori = torch.nn.functional.softmax(output_ori)
+            output = self.interpreter.net(self.flow.hg, h)[self.flow.category][self.flow.test_idx][
+                test_idx]  # 测试集中第0个节点的分类score
+            prob = torch.nn.functional.softmax(output)
+            metric.append((torch.max(prob_ori) - prob[torch.argmax(prob_ori)]).item())
+        metric = np.mean(metric)
+        return metric
+
+    def node_importance_metric(self, counts):
+        """
+        计算各channel的节点重要性的评估指标，将最重要的前5个节点（除样本本身外）的特征全部置零，测量预测概率的改变情况
+        Parameters
+        ----------
+        counts 利用前多少个sample计算该指标
+
+        Returns list, 每个channel的评估结果 len = num_channels
+        -------
+
+        """
+        metrics1 = [[] for i in range(self.flow.model.num_channels)]
+        metrics2 = [[] for i in range(self.flow.model.num_channels)]
+        for test_idx in tqdm(range(counts)):
+            __, __, idx, grads = self.interpreter.gen_exp(test_idx)  # 获取节点总梯度tot_grad
+            original_idx = self.flow.model.category_idx[self.flow.test_idx[test_idx]].item()  # 测试样本在全部节点中的idx
+            for i in range(len(grads)):
+                max_n_idx = np.flipud(np.argsort(grads[i]))[:5]  # 梯度最大的n个梯度在grads[i]中的index
+                grad = grads[i][max_n_idx]
+                id = idx[i][max_n_idx]  # 梯度最大的前n个节点在整个图中的index
+                original_inside_idx = np.where(id == original_idx)[0]  # 判断待预测节点本身在不在梯度前几中 如果是的话返回其索引
+                if original_inside_idx.size == 1:  # 待预测的节点本身不能被遮掉吧
+                    id = np.delete(id, original_inside_idx)
+                # 计算指标1
+                output_ori = self.interpreter.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][
+                    self.flow.test_idx][
+                    test_idx]
+                prob_ori = torch.nn.functional.softmax(output_ori, dim=0)
+                output = self.interpreter.net(self.flow.hg, self.flow.model.input_feature(), mode="eva", channel=i,
+                                              idx=id)[self.flow.category][self.flow.test_idx][test_idx]
+                prob = torch.nn.functional.softmax(output, dim=0)
+                metrics1[i].append((torch.max(prob_ori) - prob[torch.argmax(prob_ori)]).item())
+                # 计算指标2
+                lm = Lime(self.flow)
+                w_pos, w_neg = lm.gen_exp(test_idx)
+                lm = Lime(self.flow, mode='eva', channel=i, idx=id)
+                new_w_pos, new_w_neg = lm.gen_exp(test_idx)
+                metrics2[i].append(w_pos[0][i] - new_w_pos[0][i])
+        return [np.mean(m) for m in metrics1], [np.mean(m) for m in metrics2]
 
 
 class Test(nn.Module):

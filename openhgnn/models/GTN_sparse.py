@@ -157,7 +157,7 @@ class GTN(BaseModel):
     #         h.register_hook(self.hook_func)
     #         return {self.category: y[self.category_idx]}  # 挑出待预测类型节点的预测结果  作为一个字典返回
 
-    def forward(self, hg, h):
+    def forward(self, hg, h, **kwargs):
         with hg.local_scope():  # 这个意思是，对hg的数据的操作，都限制在这个局部内，当离开这个局部，这些改变没有发生。
             hg.ndata['h'] = h
             # * =============== Extract edges in original graph  从原始图中提取边的过程 ================
@@ -183,6 +183,9 @@ class GTN(BaseModel):
             self.h_list = []
             for i in range(self.num_channels):
                 self.h_list.append(h.clone())
+            if len(kwargs) != 0:
+                if kwargs['mode'] == 'eva':  # 测试节点重要性，要对hlist进行节点置零操作
+                    self.h_list[kwargs['channel']][kwargs['idx']] = 0
             for i in range(self.num_channels):  # 对于每个channel分别操作
                 g = dgl.remove_self_loop(H[i])  # 去除图中指向节点自己的边
                 edge_weight = g.edata['w_sum']  # 获取每个边的权重
