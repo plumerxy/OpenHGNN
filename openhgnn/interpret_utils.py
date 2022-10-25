@@ -1,4 +1,8 @@
 import numpy as np
+from openhgnn.Interpret import GradCAM
+from openhgnn.Interpret import Lime
+from openhgnn.Interpret import InterpretEvaluator
+from openhgnn.Interpret import Saliency
 
 
 def node_distribution_plot(grad_idx, grad):
@@ -23,3 +27,105 @@ def node_distribution_plot(grad_idx, grad):
     plt.ylabel("attribution")
     plt.show()
 
+
+def gtn_metapath_weight(flow):
+    """ GTN生成的每个同质图的具体元路径权重计算"""
+    # y_pred = flow.model(flow.hg, flow.model.input_feature())[flow.category][
+    #     flow.train_idx].detach().numpy()  # 训练集的分类结果yc
+    etypes_dict = flow.hg.canonical_etypes.copy()  # 边类型
+    etypes_dict.append(('', '', ''))
+    conv_weights = []  # conv 的权重
+    for i in range(flow.model.num_layers):
+        conv_weights.append(flow.model.layers[i].conv1.filter.detach().numpy().T)
+        if i == 0:
+            conv_weights.append(flow.model.layers[i].conv2.filter.detach().numpy().T)
+    metapath_weights = []  # 记录有效元路径的权重
+    metapath = []  # 记录有效元路径
+    for i, wi in enumerate(conv_weights[0]):
+        for j, wj in enumerate(conv_weights[1]):
+            for k, wk in enumerate(conv_weights[2]):
+                if (etypes_dict[i][2] == etypes_dict[j][0]) and (etypes_dict[j][2] == etypes_dict[k][0]):
+                    str_m = etypes_dict[i][1] + '-' + etypes_dict[j][2] + '-' + etypes_dict[k][2]
+                    if str_m in metapath:
+                        metapath_weights[index_metapath(str_m, metapath)] += wi * wj * wk
+                    else:
+                        metapath.append(str_m)
+                        metapath_weights.append(wi * wj * wk)
+                elif (etypes_dict[i][0] == '') and (etypes_dict[j][2] == etypes_dict[k][0]):
+                    str_m = etypes_dict[j][1] + '-' + etypes_dict[k][2]
+                    if str_m in metapath:
+                        metapath_weights[index_metapath(str_m, metapath)] += wi * wj * wk
+                    else:
+                        metapath.append(str_m)
+                        metapath_weights.append(wi * wj * wk)
+                elif (etypes_dict[j][0] == '') and (etypes_dict[i][2] == etypes_dict[k][0]):
+                    str_m = etypes_dict[i][1] + '-' + etypes_dict[k][2]
+                    if str_m in metapath:
+                        metapath_weights[index_metapath(str_m, metapath)] += wi * wj * wk
+                    else:
+                        metapath.append(str_m)
+                        metapath_weights.append(wi * wj * wk)
+                elif (etypes_dict[k][0] == '') and (etypes_dict[i][2] == etypes_dict[j][0]):
+                    str_m = etypes_dict[i][1] + '-' + etypes_dict[j][2]
+                    if str_m in metapath:
+                        metapath_weights[index_metapath(str_m, metapath)] += wi * wj * wk
+                    else:
+                        metapath.append(str_m)
+                        metapath_weights.append(wi * wj * wk)
+    del metapath[len(metapath) - 1]
+    del metapath_weights[len(metapath) - 1]
+
+    """保存到csv"""
+    # import pandas as pd
+    # import openpyxl
+    # dt = pd.DataFrame(metapath_weights, index=metapath)
+    # dt.to_excel("meta_path.xlsx")
+    return metapath, metapath_weights
+
+
+def index_metapath(str_m, metapath):
+    """查找重复的元路径，返回index"""
+    for i, str in enumerate(metapath):
+        if str_m == str:
+            return i
+    return -1
+
+
+def gtn_inter(flow):
+    """ 可解释性 """
+    # ------- 节点重要性 ------ #
+    sl = Saliency(flow, "h_list")
+    # tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+    eva = InterpretEvaluator(sl)
+    print("----------------node importance evaluation----------------")
+    m_tot_node_importance = eva.tot_node_importance(1)
+    print("total prob diff: %.5f" % m_tot_node_importance)
+    nim1, nim2 = eva.node_importance_metric(1)
+    print("prob diff: %s" % str(nim1))
+    print("lime importance diff: %s" % str(nim2))
+
+    # ------- lime元路径解释 ------ #
+    # exp = self.metapath_interpret_lime(flow)
+    lm = Lime(flow)  # 初始化lime explainer
+    w_pos, w_neg = lm.gen_exp(10)  # 查看第i个测试用例的正负权重
+    eva = InterpretEvaluator(lm)  # 初始化可解释性评估器
+    lmm1, lmm2 = eva.test_metrics(1)  # 计算指标
+    print("-------------lime for 2000 samples-----------")
+    print("m1 metric: " + str(lmm1))
+    print("m2 metric: " + str(lmm2))
+
+    # ------- grad-cam元路径解释 ------
+    gc = GradCAM(flow, flow.model, "linear1")
+    w_pos, w_neg = gc.gen_exp(10)
+    eva = InterpretEvaluator(gc)
+    m1, m2 = eva.test_metrics(1)
+    print("-------------grad-cam for 2000 samples-----------")
+    print("m1 metric: " + str(m1))
+    print("m2 metric: " + str(m2))
+
+    # ------- GTN的权重 ----------- #
+    metapath, metapath_weight = gtn_metapath_weight(flow)
+
+    return {"total node importance": m_tot_node_importance, "node importance metric": (nim1, nim2), "lime metapath "
+                                                                                                    "importance": (
+        lmm1, lmm2), "grad-cam metapath importance": (m1, m2)}

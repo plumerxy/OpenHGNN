@@ -313,7 +313,7 @@ class InterpretEvaluator(object):
         ----------
         counts 利用前多少个sample计算该指标
 
-        Returns list, 每个channel的评估结果 len = num_channels
+        Returns list1 概率改变情况, list2重要性改变情况, 每个channel的评估结果 len = num_channels
         -------
 
         """
