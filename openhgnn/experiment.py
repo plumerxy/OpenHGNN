@@ -10,12 +10,12 @@ from .auto import hpo_experiment
 import lime
 import lime.lime_tabular
 import numpy as np
-from openhgnn.Interpret import GradCAM
-from openhgnn.Interpret import Lime
-from openhgnn.Interpret import InterpretEvaluator
-from openhgnn.Interpret import Saliency
+from openhgnn.InterpretGTN import GradCAM
+from openhgnn.InterpretGTN import Lime
+from openhgnn.InterpretGTN import InterpretEvaluator
+from openhgnn.InterpretGTN import Saliency
 import itertools
-from .interpret_utils import node_distribution_plot
+from .interpret_utils import node_distribution_plot, han_inter
 from .interpret_utils import gtn_inter
 
 __all__ = ['Experiment']
@@ -112,11 +112,12 @@ class Experiment(object):
             """ GNN模型训练部分 """
             flow = build_flow(self.config,
                               trainerflow)  # 所有可用的trainerflow类会被注册到一个字典中，根据config所设定的flow名，构造一个相应的trainerflow对象。
-            result = flow.train()  # 训练一个分类器
-            # flow.model = torch.load("gtn.pth")
-            # data = gtn_inter(flow)
+            # result = flow.train()  # 训练一个分类器
+            # torch.save(flow.model, "han.pth")
+            flow.model = torch.load("han.pth")
+            data = han_inter(flow)
             # output = flow.model(flow.hg, flow.model.input_feature())
-            return result
+            # return result
 
 
     def __repr__(self):

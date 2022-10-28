@@ -126,7 +126,7 @@ class GradCAM(object):
         self.handlers = []
 
         y_pred = flow.model(flow.hg, flow.model.input_feature())
-        self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
+        # self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
         self._register_hook()
 
     def _forward_hook_func(self, model, input, output):

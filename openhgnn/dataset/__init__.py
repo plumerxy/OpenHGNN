@@ -110,6 +110,8 @@ def build_dataset_v2(dataset, task):  # GTN数据集
             if target_ntype is None:
                 target_ntype = getattr(d, 'target_ntype')
             res = AsNodeClassificationDataset(d, target_ntype=target_ntype)  # 拿到数据集，还要把它的格式进行一些转化，以便于适应节点分类任务。 添加了mask之类的
+            if d.name == 'imdb4GTN' or d.name == 'acm4GTN':
+                res.meta_paths_dict = d.meta_paths_dict
         elif task == 'link_prediction':
             target_link = getattr(d, 'target_link')
             target_link_r = getattr(d, 'target_link_r')

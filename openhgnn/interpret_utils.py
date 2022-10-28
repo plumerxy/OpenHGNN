@@ -1,8 +1,10 @@
 import numpy as np
-from openhgnn.Interpret import GradCAM
-from openhgnn.Interpret import Lime
-from openhgnn.Interpret import InterpretEvaluator
-from openhgnn.Interpret import Saliency
+from openhgnn.InterpretGTN import GradCAM
+from openhgnn.InterpretGTN import Lime
+from openhgnn.InterpretGTN import InterpretEvaluator
+from openhgnn.InterpretGTN import Saliency
+
+from openhgnn import InterpretHAN
 
 
 def node_distribution_plot(grad_idx, grad):
@@ -90,6 +92,26 @@ def index_metapath(str_m, metapath):
             return i
     return -1
 
+
+def han_inter(flow):
+    # ------- grad-cam元路径解释 ------
+    gc = InterpretHAN.GradCAM(flow, flow.model, "layers.1.model.mods")
+    w_pos, w_neg = gc.gen_exp(0)
+    eva = InterpretHAN.InterpretEvaluator(gc)
+    m1, m2 = eva.test_metrics(2)
+    print("-------------grad-cam for 2000 samples-----------")
+    print("m1 metric: " + str(m1))
+    print("m2 metric: " + str(m2))
+
+    # ------- lime元路径解释 ------ #
+    # exp = self.metapath_interpret_lime(flow)
+    lm = InterpretHAN.Lime(flow, layer_name="layers.1.model.mods")  # 初始化lime explainer
+    w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
+    eva = InterpretHAN.InterpretEvaluator(lm)  # 初始化可解释性评估器
+    lmm1, lmm2 = eva.test_metrics(2)  # 计算指标
+    print("-------------lime for 2000 samples-----------")
+    print("m1 metric: " + str(lmm1))
+    print("m2 metric: " + str(lmm2))
 
 def gtn_inter(flow):
     """ 可解释性 """

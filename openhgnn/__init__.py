@@ -6,5 +6,5 @@ from .tasks import *
 from .utils import *
 from .sampler import *
 from .experiment import *
-from .Interpret import *
+from .InterpretGTN import *
 from .interpret_utils import *

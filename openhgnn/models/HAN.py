@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
 
 import dgl
 from dgl.nn.pytorch import GATConv
@@ -85,6 +86,8 @@ class HAN(BaseModel):
             self.layers.append(HANLayer(meta_paths, hidden_size * num_heads[l-1],
                                         hidden_size, num_heads[l], dropout))
         self.linear = nn.Linear(hidden_size * num_heads[-1], out_size)
+        self.hidden_dim = hidden_size * num_heads[-1]
+        self.meta_paths_num = len(meta_paths)
 
     def forward(self, g, h_dict):
 
@@ -101,6 +104,24 @@ class HAN(BaseModel):
 
         return {self.category: h.detach().cpu().numpy()}
 
+    def predict_lime(self, data):
+        """
+
+        Parameters
+        ----------
+        data: numpy array，测试数据。 han的各同质图拼接起来输入进来，然后再拆开
+
+        Returns 预测结果y
+        -------
+
+        """
+        data = data.reshape(-1, self.meta_paths_num, self.hidden_dim)
+        X_tensor = torch.from_numpy(data).float()
+        X_tensor = [X_tensor[:, i] for i in range(len(X_tensor[0]))]
+        embedding = self.layers[-1].model.SemanticConv(X_tensor)
+        logits = self.linear(embedding)
+        probs = torch.nn.functional.softmax(logits, dim=1)
+        return probs.detach().numpy()
 
 class HANLayer(nn.Module):
     """
@@ -152,7 +173,7 @@ class HANLayer(nn.Module):
             self._cached_graph = g
             self._cached_coalesced_graph.clear()
             for mp, mp_value in self.meta_paths_dict.items():
-                self._cached_coalesced_graph[mp] = dgl.metapath_reachable_graph(
+                self._cached_coalesced_graph[mp] = dgl.metapath_reachable_graph(  # 用于生成基于元路径的同质图
                         g, mp_value)
         h = self.model(self._cached_coalesced_graph, h)
         return h

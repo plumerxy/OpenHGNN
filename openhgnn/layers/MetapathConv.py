@@ -17,12 +17,12 @@ class MetapathConv(nn.Module):
 
     Parameters
     ------------
-    meta_paths_dict : dict[str, list[tuple(meta-path)]]
+    meta_paths_dict : dict[str, list[tuple(meta-path)]] 元路径字典
         contain multiple meta-paths.
-    mods : nn.ModuleDict
+    mods : nn.ModuleDict  以元路径为key value为相应同质图要使用的同质图GNN。
         aggregation function
     macro_func : callable aggregation func
-        A semantic aggregation way, e.g. 'mean', 'max', 'sum' or 'attention'
+        A semantic aggregation way, e.g. 'mean', 'max', 'sum' or 'attention'  各元路径的结果的聚合函数
 
     """
     def __init__(self, meta_paths_dict, mods, macro_func, **kargs):
