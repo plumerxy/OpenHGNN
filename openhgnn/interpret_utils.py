@@ -7,7 +7,7 @@ from openhgnn.InterpretGTN import Saliency
 from openhgnn import InterpretHAN
 
 
-def node_distribution_plot(grad_idx, grad):
+def node_distribution_plot(grad_idx, grad, flag='0'):
     """
     为基于不同同质图生成的节点重要性绘制散点图
     Parameters
@@ -22,8 +22,11 @@ def node_distribution_plot(grad_idx, grad):
     import matplotlib.pyplot as plt
     plt.title("Distribution of node importance")
     for i in range(len(grad)):
-        plt.plot(grad_idx[i], grad[i], 'o', label="channel " + str(i))
-        # plt.plot(x, grad[i], label="channel " + str(i))
+        if flag == 'linear':
+            plt.plot(grad_idx[i], grad[i], label="channel " + str(i))
+        else:
+            plt.plot(grad_idx[i], grad[i], 'o', label="channel " + str(i))
+
     plt.legend()
     plt.xlabel("node")
     plt.ylabel("attribution")
@@ -94,11 +97,24 @@ def index_metapath(str_m, metapath):
 
 
 def han_inter(flow):
+    flow.model(flow.hg, flow.model.input_feature())
+    # ------- 节点重要性 ------ #
+    sl = InterpretHAN.Saliency(flow, "layers.0.model.mods")
+    tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+    # node_distribution_plot(idx[0].reshape(1, -1), grad[0].reshape(1, -1))
+    eva = InterpretHAN.InterpretEvaluator(sl)
+    print("----------------node importance evaluation----------------")
+    m_tot_node_importance = eva.tot_node_importance(2000)
+    print("total prob diff: %.5f" % m_tot_node_importance)
+    nim1, nim2 = eva.node_importance_metric(2000)
+    print("prob diff: %s" % str(nim1))
+    print("lime importance diff: %s" % str(nim2))
+
     # ------- grad-cam元路径解释 ------
     gc = InterpretHAN.GradCAM(flow, flow.model, "layers.1.model.mods")
     w_pos, w_neg = gc.gen_exp(0)
     eva = InterpretHAN.InterpretEvaluator(gc)
-    m1, m2 = eva.test_metrics(2)
+    m1, m2 = eva.test_metrics(2000)
     print("-------------grad-cam for 2000 samples-----------")
     print("m1 metric: " + str(m1))
     print("m2 metric: " + str(m2))
@@ -108,7 +124,7 @@ def han_inter(flow):
     lm = InterpretHAN.Lime(flow, layer_name="layers.1.model.mods")  # 初始化lime explainer
     w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
     eva = InterpretHAN.InterpretEvaluator(lm)  # 初始化可解释性评估器
-    lmm1, lmm2 = eva.test_metrics(2)  # 计算指标
+    lmm1, lmm2 = eva.test_metrics(2000)  # 计算指标
     print("-------------lime for 2000 samples-----------")
     print("m1 metric: " + str(lmm1))
     print("m2 metric: " + str(lmm2))

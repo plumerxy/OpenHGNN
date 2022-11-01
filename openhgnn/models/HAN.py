@@ -89,10 +89,12 @@ class HAN(BaseModel):
         self.hidden_dim = hidden_size * num_heads[-1]
         self.meta_paths_num = len(meta_paths)
 
-    def forward(self, g, h_dict):
-
-        for gnn in self.layers:
-            h_dict = gnn(g, h_dict)
+    def forward(self, g, h_dict, **kwargs):
+        for i, gnn in enumerate(self.layers):
+            if i == 0 and len(kwargs) != 0 and kwargs['mode'] == 'eva':  # 测试节点重要性，对h_dict进行节点置零操作
+                h_dict = gnn(g, h_dict, **kwargs)
+            else:
+                h_dict = gnn(g, h_dict)
         out_dict = {ntype: self.linear(h_dict[ntype]) for ntype in self.category}
         
         return out_dict
@@ -155,7 +157,7 @@ class HANLayer(nn.Module):
         self._cached_graph = None
         self._cached_coalesced_graph = {}
 
-    def forward(self, g, h):
+    def forward(self, g, h, **kwargs):
         r"""
         Parameters
         -----------
@@ -175,5 +177,5 @@ class HANLayer(nn.Module):
             for mp, mp_value in self.meta_paths_dict.items():
                 self._cached_coalesced_graph[mp] = dgl.metapath_reachable_graph(  # 用于生成基于元路径的同质图
                         g, mp_value)
-        h = self.model(self._cached_coalesced_graph, h)
+        h = self.model(self._cached_coalesced_graph, h, **kwargs)
         return h

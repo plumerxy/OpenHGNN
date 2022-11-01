@@ -32,7 +32,7 @@ class MetapathConv(nn.Module):
         self.meta_paths_dict = meta_paths_dict
         self.SemanticConv = macro_func
 
-    def forward(self, g_list, h_dict):
+    def forward(self, g_list, h_dict, **kwargs):
         r"""
         Parameters
         -----------
@@ -51,6 +51,9 @@ class MetapathConv(nn.Module):
         for mp, meta_path in self.meta_paths_dict.items():
             new_g = g_list[mp]
             h = h_dict[new_g.srctypes[0]]
+            if len(kwargs) != 0 and kwargs['mode'] == 'eva' and mp == kwargs['mp']:  # 对h_dict进行置零
+                h = h.clone()
+                h[kwargs['idx']] = 0
             outputs[new_g.dsttypes[0]].append(self.mods[mp](new_g, h).flatten(1))
         #semantic_embeddings = th.stack(semantic_embeddings, dim=1)  # (N, M, D * K)
         # Aggregate the results for each destination node type

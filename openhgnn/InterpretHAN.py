@@ -53,7 +53,7 @@ class Lime(object):
     通过lime的方法，为每个基于元路径的node embedding计算重要性
     """
 
-    def __init__(self, flow, layer_name='', **kwargs):
+    def __init__(self, flow, layer_name="layers.1.model.mods", **kwargs):
         """
         处理数据集，生成explainer
         flow为对应的trainer flow
@@ -68,8 +68,7 @@ class Lime(object):
         self.flow.model.eval()
 
         if len(kwargs) != 0:
-            y_pred = flow.model(flow.hg, flow.model.input_feature(), mode=kwargs['mode'], channel=kwargs['channel'],
-                                idx=kwargs['idx'])
+            y_pred = flow.model(flow.hg, flow.model.input_feature(), **kwargs)
         else:
             y_pred = flow.model(flow.hg, flow.model.input_feature())
         self.X_ = [self.X_dict[mp] for mp in self.meta_path]
@@ -195,6 +194,92 @@ class GradCAM(object):
         return pos_w, neg_w
 
 
+class Saliency(object):
+    """
+    计算每个基于元路径的同质图的节点重要性，以及总节点重要性
+    从feature_name中获得待计算梯度的特征矩阵变量，并用hook函数绑定获取中间梯度
+    """
+
+    def __init__(self, flow, layer_name):
+        self.flow = flow
+        self.net = flow.model
+        self.layer_name = layer_name  # 要求梯度的变量名
+
+        self.feature_dict = {}
+        self.gradient_dict = {}
+        self.feature = []
+        self.gradient = []
+        self.handlers = []
+        self.net.eval()
+        self.test = None
+        self.meta_path = []
+
+        self._register_hook()
+        self.output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx]
+
+    def _forward_hook_func(self, model, input, output):
+        for mp in self.meta_path:
+            if model is self.flow.model.layers[0].model.mods[mp]:
+                self.feature_dict[mp] = input
+
+    def _backward_hook_func(self, model, input_grad, output_grad):
+        for mp in self.meta_path:
+            if model is self.flow.model.layers[0].model.mods[mp]:
+                self.gradient_dict[mp] = input_grad[0].flatten(1).detach()
+
+    def _register_hook(self):
+        for (name, module) in self.net.named_modules():
+            if name == self.layer_name:  # layers.0.model.mods
+                for meta_path, mod in module.items():
+                    self.meta_path.append(meta_path)
+                    self.handlers.append(mod.register_forward_hook(self._forward_hook_func))
+                    self.handlers.append(mod.register_backward_hook(self._backward_hook_func))
+
+    def gen_exp(self, idx):
+        """
+        为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        包含总节点重要性和不同同质图的节点重要性
+        Parameters
+        ----------
+        idx: 第idx个样本
+
+        Returns 具有梯度的节点的index，以及相应的重要性。
+                nonzeroindex, grad_sum:   shape ---> num_important_nodes
+                idx_list, grad_list:  shape  ---> (num_channels, num_important_nodes)
+        -------
+
+        """
+        self.net.zero_grad()
+        self.gradient_dict = {}
+        self.gradient = []
+
+        # output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx][
+        # idx]  # 测试集中第0个节点的分类score
+        output = self.output[idx]
+        index = np.argmax(output.data.numpy())  # 得分最高类别的index
+        target = output[index]  # 对该类别的得分求梯度
+        # self._register_hook()
+        target.backward(retain_graph=True)
+        self.gradient = [self.gradient_dict[mp] for mp in self.meta_path]
+        grad_list = []
+        idx_list = []
+        grad_sum = torch.zeros_like(self.gradient[0])  # 用于存储所有同质图的总梯度
+        for grad in self.gradient:  # 对于每一个基于元路径的同质图
+            nonzeroindex = torch.nonzero(grad.sum(axis=1)).view(-1)  # 哪个节点有梯度
+            idx_list.append(nonzeroindex)
+            grad_list.append(grad[nonzeroindex].sum(axis=1))  # 所有的节点特征维度上求和 作为该节点的重要性
+            grad_sum = grad_sum + grad
+        grad_list = torch.stack(grad_list)
+        idx_list = torch.stack(idx_list)
+        grad_list = normalize(grad_list, p=2.0, dim=1)  # 这个获得的就是正则化后的节点重要性
+
+        nonzeroindex = torch.nonzero(grad_sum.sum(axis=1)).view(-1)
+        grad_sum = grad_sum[nonzeroindex].sum(axis=1).view(1, -1)
+        grad_sum = normalize(grad_sum, p=2.0, dim=1)
+
+        return nonzeroindex.detach().numpy(), grad_sum.detach().numpy(), idx_list.detach().numpy(), grad_list.detach().numpy()
+
+
 class InterpretEvaluator(object):
     """
     测试解释方法的指标
@@ -232,14 +317,14 @@ class InterpretEvaluator(object):
             max_idx = np.argmax(w_pos)
             sample = self.test[test_idx].copy()
             sample[max_idx * self.flow.args.hidden_dim * self.flow.args.num_heads[-1]: (
-                                                                                                   max_idx + 1) * self.flow.args.hidden_dim *
+                                                                                               max_idx + 1) * self.flow.args.hidden_dim *
                                                                                        self.flow.args.num_heads[-1]] = 0
             prob_max = self.flow.model.predict_lime(sample.reshape(1, -1))
             m1_list.append(np.max(prob, axis=1) - prob_max[0][np.argmax(prob)])
             min_idx = np.argmin(w_pos)
             sample = self.test[test_idx].copy()
             sample[min_idx * self.flow.args.hidden_dim * self.flow.args.num_heads[-1]: (
-                                                                                                   min_idx + 1) * self.flow.args.hidden_dim *
+                                                                                               min_idx + 1) * self.flow.args.hidden_dim *
                                                                                        self.flow.args.num_heads[-1]] = 0
             prob_min = self.flow.model.predict_lime(sample.reshape(1, -1))
             m2_list.append(np.max(prob, axis=1) - prob_min[0][np.argmax(prob)])
@@ -264,21 +349,20 @@ class InterpretEvaluator(object):
             # 获取待遮节点的index
             tot_idx, tot_grad, __, __ = self.interpreter.gen_exp(test_idx)  # 获取节点总梯度tot_grad
             chosen_idx = tot_idx[np.flipud(np.argsort(tot_grad)[0])[:5]]
-            original_idx = self.flow.model.category_idx[self.flow.test_idx[test_idx]].item()  # 测试样本在全部节点中的idx
-            original_inside_idx = np.where(chosen_idx == original_idx)[0]  # 判断待预测节点本身在不在梯度前几中 如果是的话返回其索引
+            # original_idx = self.flow.model.category_idx[self.flow.test_idx[test_idx]].item()  # 测试样本在全部节点中的idx
+            original_inside_idx = np.where(chosen_idx == self.flow.test_idx[test_idx])[
+                0]  # 判断待预测节点本身在不在梯度前几中 如果是的话返回其索引
             if original_inside_idx.size == 1:  # 待预测的节点本身不能被遮掉吧
                 chosen_idx = np.delete(chosen_idx, original_inside_idx)
             # 遮掉相应节点的特征，置为0
             h = self.flow.model.input_feature()
-            ntype_dict = {}
-            sum = 0
-            for ntype in self.flow.hg.ntypes:
-                ntype_dict[ntype] = np.arange(sum, sum + self.flow.hg.num_nodes(ntype))
-                sum = sum + self.flow.hg.num_nodes(ntype)
-            for i in chosen_idx:
-                for ntype, index in ntype_dict.items():
-                    if np.argwhere(index == i).size == 1:
-                        h[ntype][np.argwhere(index == i)] = 0
+            # ntype_dict = {}
+            # sum = 0
+            # for ntype in self.flow.hg.ntypes:
+            #     ntype_dict[ntype] = np.arange(sum, sum + self.flow.hg.num_nodes(ntype))
+            #     sum = sum + self.flow.hg.num_nodes(ntype)
+            for i, index in enumerate(chosen_idx):
+                h[self.flow.category][index] = 0
             # 计算指标
             output_ori = \
                 self.interpreter.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][
@@ -302,11 +386,11 @@ class InterpretEvaluator(object):
         -------
 
         """
-        metrics1 = [[] for i in range(self.flow.model.num_channels)]
-        metrics2 = [[] for i in range(self.flow.model.num_channels)]
+        metrics1 = [[] for i in range(len(self.interpreter.meta_path))]
+        metrics2 = [[] for i in range(len(self.interpreter.meta_path))]
         for test_idx in tqdm(range(counts)):
             __, __, idx, grads = self.interpreter.gen_exp(test_idx)  # 获取节点总梯度tot_grad
-            original_idx = self.flow.model.category_idx[self.flow.test_idx[test_idx]].item()  # 测试样本在全部节点中的idx
+            original_idx = self.flow.test_idx[test_idx]  # 测试样本在全部预测节点中的idx
             for i in range(len(grads)):
                 max_n_idx = np.flipud(np.argsort(grads[i]))[:5]  # 梯度最大的n个梯度在grads[i]中的index
                 grad = grads[i][max_n_idx]
@@ -320,14 +404,15 @@ class InterpretEvaluator(object):
                         self.flow.test_idx][
                         test_idx]
                 prob_ori = torch.nn.functional.softmax(output_ori, dim=0)
-                output = self.interpreter.net(self.flow.hg, self.flow.model.input_feature(), mode="eva", channel=i,
+                output = self.interpreter.net(self.flow.hg, self.flow.model.input_feature(), mode="eva",
+                                              mp=self.interpreter.meta_path[i],
                                               idx=id)[self.flow.category][self.flow.test_idx][test_idx]
                 prob = torch.nn.functional.softmax(output, dim=0)
                 metrics1[i].append((torch.max(prob_ori) - prob[torch.argmax(prob_ori)]).item())
                 # 计算指标2
                 lm = Lime(self.flow)
                 w_pos, w_neg = lm.gen_exp(test_idx)
-                lm = Lime(self.flow, mode='eva', channel=i, idx=id)
+                lm = Lime(self.flow, mode="eva", mp=self.interpreter.meta_path[i], idx=id)
                 new_w_pos, new_w_neg = lm.gen_exp(test_idx)
                 metrics2[i].append(w_pos[0][i] - new_w_pos[0][i])
         return [np.mean(m) for m in metrics1], [np.mean(m) for m in metrics2]
