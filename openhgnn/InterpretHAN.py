@@ -375,7 +375,7 @@ class InterpretEvaluator(object):
         metric = np.mean(metric)
         return metric
 
-    def node_importance_metric(self, counts):
+    def node_importance_metric(self, counts, layer_name='layers.1.model.mods'):
         """
         计算各channel的节点重要性的评估指标，将最重要的前5个节点（除样本本身外）的特征全部置零，测量预测概率的改变情况
         Parameters
@@ -410,9 +410,9 @@ class InterpretEvaluator(object):
                 prob = torch.nn.functional.softmax(output, dim=0)
                 metrics1[i].append((torch.max(prob_ori) - prob[torch.argmax(prob_ori)]).item())
                 # 计算指标2
-                lm = Lime(self.flow)
+                lm = Lime(self.flow, layer_name=layer_name)
                 w_pos, w_neg = lm.gen_exp(test_idx)
-                lm = Lime(self.flow, mode="eva", mp=self.interpreter.meta_path[i], idx=id)
+                lm = Lime(self.flow, layer_name=layer_name, mode="eva", mp=self.interpreter.meta_path[i], idx=id)
                 new_w_pos, new_w_neg = lm.gen_exp(test_idx)
                 metrics2[i].append(w_pos[0][i] - new_w_pos[0][i])
         return [np.mean(m) for m in metrics1], [np.mean(m) for m in metrics2]

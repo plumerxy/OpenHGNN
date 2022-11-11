@@ -130,7 +130,7 @@ def load_acm_raw(remove_self_loop):
     train_mask = get_binary_mask(num_nodes, train_idx)
     val_mask = get_binary_mask(num_nodes, val_idx)
     test_mask = get_binary_mask(num_nodes, test_idx)
-    hg.nodes['paper'].data['h'] = features
+    hg.nodes['paper'].data['h'] = features  # bow
     hg.nodes['paper'].data['labels'] = labels
     hg.nodes['paper'].data['train_mask'] = train_mask
     hg.nodes['paper'].data['val_mask'] = val_mask
