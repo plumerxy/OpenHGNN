@@ -97,6 +97,19 @@ def index_metapath(str_m, metapath):
 
 
 def han_inter(flow):
+    """
+    不同的数据集，对应的han结构可能不一样，layer_name可能需要更改
+
+    acm_raw： 只有一个GNN的卷积层，所以用layers.0
+    imdb4GTN: 两个GNN卷积层，元路径用layers.1，节点用layers.0
+    Parameters
+    ----------
+    flow
+
+    Returns
+    -------
+
+    """
     flow.model(flow.hg, flow.model.input_feature())
     # ------- 节点重要性 ------ #
     sl = InterpretHAN.Saliency(flow, "layers.0.model.mods")  # 需要input layers.0
