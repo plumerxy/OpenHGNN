@@ -1,10 +1,11 @@
 import numpy as np
+import gc
 from openhgnn.InterpretGTN import GradCAM
 from openhgnn.InterpretGTN import Lime
 from openhgnn.InterpretGTN import InterpretEvaluator
 from openhgnn.InterpretGTN import Saliency
 
-from openhgnn import InterpretHAN
+from openhgnn import InterpretHAN, InterpretGTN
 
 
 def node_distribution_plot(grad_idx, grad, flag='0'):
@@ -110,49 +111,78 @@ def han_inter(flow):
     -------
 
     """
-    flow.model(flow.hg, flow.model.input_feature())
+    num_sample = 300
+
+
     # ------- 节点重要性 ------ #
-    sl = InterpretHAN.Saliency(flow, "layers.0.model.mods")  # 需要input layers.0
-    tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+    rise = InterpretHAN.Rise(flow, "test", N=400, p=0.8, threshold=0.)
+    # tot_idx, tot_grad = rise.gen_exp(2)
     # node_distribution_plot(idx[0].reshape(1, -1), grad[0].reshape(1, -1))
-    eva = InterpretHAN.InterpretEvaluator(sl)
+    eva = InterpretHAN.InterpretEvaluator(rise)
     print("----------------node importance evaluation----------------")
-    m_tot_node_importance = eva.tot_node_importance(2)
+    m_tot_node_importance = eva.tot_node_importance(num_sample)
     print("total prob diff: %.5f" % m_tot_node_importance)
-    nim1, nim2 = eva.node_importance_metric(2, layer_name="layers.0.model.mods")  # 需要output，layers.-1，根据实际情况设定-1
-    print("prob diff: %s" % str(nim1))
-    print("lime importance diff: %s" % str(nim2))
+    # nim1, nim2 = eva.node_importance_metric(num_sample, layer_name="layers.1.model.mods")  # 这里和LIME是一致的，为了计算指标用
+    # print("prob diff: %s" % str(nim1))
+    # print("lime importance diff: %s" % str(nim2))
 
-    # ------- grad-cam元路径解释 ------
-    gc = InterpretHAN.GradCAM(flow, flow.model, "layers.0.model.mods")  # 需要output，layers.-1，根据实际情况设定-1
-    w_pos, w_neg = gc.gen_exp(0)
-    eva = InterpretHAN.InterpretEvaluator(gc)
-    m1, m2 = eva.test_metrics(2)
-    print("-------------grad-cam for 2000 samples-----------")
-    print("m1 metric: " + str(m1))
-    print("m2 metric: " + str(m2))
-
-    # ------- lime元路径解释 ------ #
-    # exp = self.metapath_interpret_lime(flow)
-    lm = InterpretHAN.Lime(flow, layer_name="layers.0.model.mods")  # 初始化lime explainer # 需要output，layers.-1，根据实际情况设定-1
-    w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
-    eva = InterpretHAN.InterpretEvaluator(lm)  # 初始化可解释性评估器
-    lmm1, lmm2 = eva.test_metrics(2)  # 计算指标
-    print("-------------lime for 2000 samples-----------")
-    print("m1 metric: " + str(lmm1))
-    print("m2 metric: " + str(lmm2))
+    # # ------- 节点重要性 ------ #
+    # sl = InterpretHAN.Saliency(flow, "layers.0.model.mods")  # 需要input layers.0 要的是输入同质图的特征矩阵
+    # tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+    # # node_distribution_plot(idx[0].reshape(1, -1), grad[0].reshape(1, -1))
+    # eva = InterpretHAN.InterpretEvaluator(sl)
+    # print("----------------node importance evaluation----------------")
+    # m_tot_node_importance = eva.tot_node_importance(num_sample)
+    # print("total prob diff: %.5f" % m_tot_node_importance)
+    # nim1, nim2 = eva.node_importance_metric(num_sample, layer_name="layers.1.model.mods")  # 这里和LIME是一致的，为了计算指标用（layer暂时没用）
+    # print("prob diff: %s" % str(nim1))
+    # print("lime importance diff: %s" % str(nim2))
+    #
+    # # ------- grad-cam元路径解释 ------
+    # gc = InterpretHAN.GradCAM(flow, flow.model, "layers.1.model.mods")  # 需要最后一个HANLayer的model.mods 具体是012根据实际情况确定 imdb是1
+    # w_pos, w_neg = gc.gen_exp(0)
+    # eva = InterpretHAN.InterpretEvaluator(gc)
+    # m1, m2 = eva.test_metrics(num_sample)
+    # print("-------------grad-cam for 2000 samples-----------")
+    # print("m1 metric: " + str(m1))
+    # print("m2 metric: " + str(m2))
+    #
+    # # ------- lime元路径解释 ------ #
+    # # exp = self.metapath_interpret_lime(flow)
+    # lm = InterpretHAN.Lime(flow)  # 需要最后一个HANLayer的model.mods 已经自动识别了 不需要手动填写
+    # w_pos, w_neg = lm.gen_exp(0)  # 查看第i个测试用例的正负权重
+    # eva = InterpretHAN.InterpretEvaluator(lm)  # 初始化可解释性评估器
+    # lmm1, lmm2 = eva.test_metrics(num_sample)  # 计算指标
+    # print("-------------lime for 2000 samples-----------")
+    # print("m1 metric: " + str(lmm1))
+    # print("m2 metric: " + str(lmm2))
 
 
 def gtn_inter(flow):
     """ 可解释性 """
+    num_sample = 20
+
+    # ------- 节点重要性 ------ #
+    rise = InterpretGTN.Rise(flow, "test", N=400, p=0.8, threshold=0.)
+    # tot_idx, tot_grad = rise.gen_exp(2)
+    # node_distribution_plot(idx[0].reshape(1, -1), grad[0].reshape(1, -1))
+    eva = InterpretGTN.InterpretEvaluator(rise)
+    print("----------------node importance evaluation----------------")
+    m_tot_node_importance = eva.tot_node_importance(num_sample)
+    print("total prob diff: %.5f" % m_tot_node_importance)
+    # nim1, nim2 = eva.node_importance_metric(num_sample, layer_name="layers.1.model.mods")  # 这里和LIME是一致的，为了计算指标用
+    # print("prob diff: %s" % str(nim1))
+    # print("lime importance diff: %s" % str(nim2))
+
+
     # ------- 节点重要性 ------ #
     sl = Saliency(flow, "h_list")
-    # tot_idx, tot_grad, idx, grad = sl.gen_exp(2)
+    tot_idx, tot_grad, idx, grad = sl.gen_exp(2) # 查看第i个测试用例的节点重要性
     eva = InterpretEvaluator(sl)
     print("----------------node importance evaluation----------------")
-    m_tot_node_importance = eva.tot_node_importance(1)
+    m_tot_node_importance = eva.tot_node_importance(num_sample)
     print("total prob diff: %.5f" % m_tot_node_importance)
-    nim1, nim2 = eva.node_importance_metric(1)
+    nim1, nim2 = eva.node_importance_metric(num_sample)
     print("prob diff: %s" % str(nim1))
     print("lime importance diff: %s" % str(nim2))
 
@@ -161,7 +191,7 @@ def gtn_inter(flow):
     lm = Lime(flow)  # 初始化lime explainer
     w_pos, w_neg = lm.gen_exp(10)  # 查看第i个测试用例的正负权重
     eva = InterpretEvaluator(lm)  # 初始化可解释性评估器
-    lmm1, lmm2 = eva.test_metrics(1)  # 计算指标
+    lmm1, lmm2 = eva.test_metrics(num_sample)  # 计算指标
     print("-------------lime for 2000 samples-----------")
     print("m1 metric: " + str(lmm1))
     print("m2 metric: " + str(lmm2))
@@ -170,7 +200,7 @@ def gtn_inter(flow):
     gc = GradCAM(flow, flow.model, "linear1")
     w_pos, w_neg = gc.gen_exp(10)
     eva = InterpretEvaluator(gc)
-    m1, m2 = eva.test_metrics(1)
+    m1, m2 = eva.test_metrics(num_sample)
     print("-------------grad-cam for 2000 samples-----------")
     print("m1 metric: " + str(m1))
     print("m2 metric: " + str(m2))
@@ -181,3 +211,12 @@ def gtn_inter(flow):
     return {"total node importance": m_tot_node_importance, "node importance metric": (nim1, nim2), "lime metapath "
                                                                                                     "importance": (
         lmm1, lmm2), "grad-cam metapath importance": (m1, m2)}
+
+
+def interpreter(config, flow):
+    if config.model == 'HAN':
+        data = han_inter(flow)
+    elif config.model == 'GTN':
+        data = gtn_inter(flow)
+
+    return data

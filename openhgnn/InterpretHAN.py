@@ -1,3 +1,6 @@
+import gc
+
+import dgl
 import numpy as np
 import torch
 import torch.nn as nn
@@ -59,7 +62,7 @@ class Lime(object):
         flow为对应的trainer flow
         """
         self.flow = flow
-        self.layer_name = layer_name
+        self.layer_name = layer_name  # 暂时用不到
         self.handlers = []
         self.meta_path = []  # 还会记录相应的元路径名称
         self.X_ = []
@@ -93,11 +96,15 @@ class Lime(object):
                 self.X_dict[mp] = output.flatten(1).detach().numpy()
 
     def _register_hook(self):
-        for (name, module) in self.flow.model.named_modules():
-            if name == self.layer_name:  # layers.1.model.mods
-                for meta_path, mod in module.items():
-                    self.meta_path.append(meta_path)
-                    self.handlers.append(mod.register_forward_hook(self._forward_hook_func))
+        module = self.flow.model.layers[-1].model.mods  # 会直接定位到最后一个HANLayer中，获取各同质图的结果
+        for meta_path, mod in module.items():
+            self.meta_path.append(meta_path)
+            self.handlers.append(mod.register_forward_hook(self._forward_hook_func))
+        # for (name, module) in self.flow.model.named_modules():
+        #     if name == self.layer_name:  # layers.1.model.mods
+        #         for meta_path, mod in module.items():
+        #             self.meta_path.append(meta_path)
+        #             self.handlers.append(mod.register_forward_hook(self._forward_hook_func))
 
     def gen_exp(self, idx):
         """
@@ -278,6 +285,113 @@ class Saliency(object):
         grad_sum = normalize(grad_sum, p=2.0, dim=1)
 
         return nonzeroindex.detach().numpy(), grad_sum.detach().numpy(), idx_list.detach().numpy(), grad_list.detach().numpy()
+
+
+class Rise(object):
+    """
+       计算每个基于元路径的同质图的节点重要性，以及总节点重要性
+       利用RISE方法，随机采样，黑盒方法
+    """
+    def __init__(self, flow, layer_name, N, p, threshold):
+        self.flow = flow
+        self.net = flow.model
+        self.layer_name = layer_name  # 要求梯度的变量名
+
+        self.feature_dict = {}
+        self.gradient_dict = {}
+        self.feature = []
+        self.gradient = []
+        self.handlers = []
+        self.net.eval()
+        self.test = None
+        self.meta_path = []
+        self.coalesced_graph = {}
+        self.coalesced_graph_node_idx = {}  # 分元路径的，涉及到的邻居节点的index
+        self.coalesced_graph_node_idx_all = torch.tensor([])  # 全部的邻居节点index
+        self.N = N
+        self.p = p
+        self.threshold = threshold
+
+        self.output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx]
+
+    def generate_masks(self, idx):
+        """
+        生成掩码，按照定义好的元路径和卷积层数决定节点掩码的大小
+        通过元路径先生成同质图，再找到n阶的邻居，就是计算图，计算图即为节点掩码的范围
+        （如果有使用异质节点的，之后可以考虑再扩展）
+        p: 掩码为1的概率
+        N: 生成掩码的数量
+        idx: 测试集中的第idx个节点
+
+        Returns
+        node_idx: 对应节点的索引
+        node_masks: 对应节点的掩码
+        """
+        num_convs = len(self.flow.args.num_heads)  # 卷积层数
+        self.meta_path = self.flow.args.meta_paths_dict  # 元路径dict
+
+        # 生成基于元路径的同质图 并找到全部邻居节点
+        for mp, mp_value in self.meta_path.items():
+            self.coalesced_graph[mp] = dgl.metapath_reachable_graph(self.flow.hg, mp_value)
+            idx = torch.where(self.coalesced_graph[mp].ndata["test_mask"] == 1)[0][idx]  # 该同质图中待测试节点的index（不是全图，是该类节点中的index）
+            self.coalesced_graph_node_idx[mp] = torch.tensor([idx])  # 找邻居节点
+            for i in range(num_convs):
+                graph = self.coalesced_graph[mp].sample_neighbors(self.coalesced_graph_node_idx[mp], -1)
+                self.coalesced_graph_node_idx[mp] = torch.cat((graph.edges()[0], self.coalesced_graph_node_idx[mp])).unique()
+            self.coalesced_graph_node_idx_all = torch.cat((self.coalesced_graph_node_idx[mp], self.coalesced_graph_node_idx_all)).unique()
+
+        # 将全部邻居节点生成节点掩码
+        num_of_nodes = len(self.coalesced_graph_node_idx_all)
+        node_masks = (np.random.rand(self.N, num_of_nodes) < self.p).astype(float)  # 概率1-p置为0
+        return self.coalesced_graph_node_idx_all, node_masks
+
+    def gen_exp(self, idx):
+        """
+        为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        包含总节点重要性和不同同质图的节点重要性
+        Parameters
+        ----------
+        idx: 第idx个样本
+
+        Returns 具有梯度的节点的index，以及相应的重要性。
+                nonzeroindex, grad_sum:   shape ---> num_important_nodes
+                idx_list, grad_list:  shape  ---> (num_channels, num_important_nodes)
+        -------
+
+        """
+        self.meta_path = []
+        self.coalesced_graph = {}
+        self.coalesced_graph_node_idx = {}  # 分元路径的，涉及到的邻居节点的index
+        self.coalesced_graph_node_idx_all = torch.tensor([])  # 全部的邻居节点index
+
+        # 生成节点掩码，根据计算图生成 (目前所采到的，应该都是和待预测节点同一个类别的节点，扰动特征矩阵的时候也只考虑同类别节点即可）
+        node_idx, node_masks = self.generate_masks(idx)
+        node_masks_non = (node_masks == 0).astype(float)  # 对mask取反 看被遮掉特征的重要性
+        # 进行扰动
+        feat_masked = self.flow.model.input_feature()[self.flow.category].unsqueeze(0).repeat(self.N, 1, 1)  # 对特征矩阵进行扰动，这里只涉及到待预测类型节点的特征矩阵
+        node_masks_all = (torch.zeros((self.N, len(feat_masked[0]))).double()   # 需要扩展成完整的节点掩码以对特征矩阵进行扰动
+                          .scatter_(1, node_idx.unsqueeze(0).repeat(self.N, 1).long(), torch.tensor(node_masks)))
+        feat_masked = torch.mul(node_masks_all.unsqueeze(2), feat_masked)
+        # 获取原概率 self.output
+        prob_init = F.softmax(self.output[idx])  # 原始概率
+        # 计算扰动后的结果以计算权重
+        feat_dict = self.flow.model.input_feature().copy()
+        weights = []
+        for feat_m in tqdm(feat_masked):
+            feat_dict[self.flow.category] = feat_m.float()
+            output = self.net(self.flow.hg, feat_dict)[self.flow.category][self.flow.test_idx][idx]
+            prob = F.softmax(output)
+            weight = prob_init - prob
+            for i in range(len(weight)):
+                if weight[i] <= self.threshold:
+                    weight[i] = 0
+            weights.append(weight)
+            gc.collect()
+        weights = torch.stack(weights).detach().numpy()
+        attribution = (weights.T.dot(node_masks_non) / self.N / (1-self.p))[torch.argmax(prob_init)]
+
+        print("--------rise for inx {}, {} nodes important".format(idx, len(node_idx)))
+        return node_idx.long().detach().numpy(), torch.tensor(attribution).unsqueeze(0).detach().numpy(), None, None
 
 
 class InterpretEvaluator(object):

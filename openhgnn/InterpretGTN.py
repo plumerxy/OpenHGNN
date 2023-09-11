@@ -39,7 +39,7 @@ class Saliency(object):
 
     def gen_exp(self, idx):
         """
-        为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        为*测试集*中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
         包含总节点重要性和不同同质图的节点重要性
         Parameters
         ----------
@@ -66,10 +66,10 @@ class Saliency(object):
         idx_list = []
         grad_sum = torch.zeros_like(self.gradient[0])
         for grad in self.gradient:
-            nonzeroindex = torch.nonzero(grad.sum(axis=1)).view(-1)
+            nonzeroindex = torch.nonzero(grad.sum(axis=1)).view(-1)  # 把非零的节点记下来
             idx_list.append(nonzeroindex)
-            grad_list.append(grad[nonzeroindex].sum(axis=1))
-            grad_sum = grad_sum + grad
+            grad_list.append(grad[nonzeroindex].sum(axis=1))  # 对应的节点重要性
+            grad_sum = grad_sum + grad  # 总节点重要性（梯度方法加起来就是总重要性了）
         grad_list = torch.stack(grad_list)
         idx_list = torch.stack(idx_list)
         grad_list = normalize(grad_list, p=2.0, dim=1)  # 这个获得的就是正则化后的节点重要性
@@ -126,7 +126,8 @@ class GradCAM(object):
         self.handlers = []
 
         y_pred = flow.model(flow.hg, flow.model.input_feature())
-        # self.test = flow.model.X_[flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding
+        self.test = flow.model.X_[
+            flow.test_idx].detach().numpy()  # 测试集集中 GCN的输出embedding  TODO test是这个吗？需要看一下，评估方法的时候看这个吧
         self._register_hook()
 
     def _forward_hook_func(self, model, input, output):
@@ -135,7 +136,7 @@ class GradCAM(object):
         # self.feature.append(output)
 
     def _backward_hook_func(self, model, input_grad, output_grad):
-        self.gradient = input_grad[1]
+        self.gradient = input_grad[1]  # 需要确定梯度是不是这个
         # self.gradient.append(output_grad)
 
     def _register_hook(self):
@@ -161,7 +162,7 @@ class GradCAM(object):
         index = np.argmax(output.data.numpy())  # 得分最高类别的index
         target = output[index]  # 对该类别的得分求梯度
         target.backward()
-        weight = self.gradient[self.net.category_idx[self.flow.test_idx[idx]]].detach().numpy()
+        weight = self.gradient[self.net.category_idx[self.flow.test_idx[idx]]].detach().numpy()  # 注意考虑index的问题
         feature = self.feature[self.net.category_idx[self.flow.test_idx[idx]]].detach().numpy()
 
         return divide_weights(weight, self.flow.args.hidden_dim, cal_type="mean")
@@ -178,7 +179,8 @@ class Lime(object):
         flow为对应的trainer flow
         """
         if len(kwargs) != 0:
-            y_pred = flow.model(flow.hg, flow.model.input_feature(), mode=kwargs['mode'], channel=kwargs['channel'], idx=kwargs['idx'])
+            y_pred = flow.model(flow.hg, flow.model.input_feature(), mode=kwargs['mode'], channel=kwargs['channel'],
+                                idx=kwargs['idx'])
         else:
             y_pred = flow.model(flow.hg, flow.model.input_feature())
         train = flow.model.X_[flow.train_idx].detach().numpy()  # 训练集中 GCN的输出embedding
@@ -211,7 +213,123 @@ class Lime(object):
         weight = np.empty((len(local_exp)))  # 转化为numpy (1, hidden_dim*num_channels)
         for i, attr in local_exp:
             weight[i] = attr
-        return divide_weights(weight, self.flow.args.hidden_dim)  # w_pos, w_neg
+        return divide_weights(weight, self.flow.args.hidden_dim, cal_type="mean")  # w_pos, w_neg
+
+
+class Rise(object):
+    """
+       计算每个基于元路径的同质图的节点重要性，以及总节点重要性
+       利用RISE方法，随机采样，黑盒方法
+    """
+
+    def __init__(self, flow, layer_name, N, p, threshold):
+        self.flow = flow
+        self.net = flow.model
+        self.layer_name = layer_name  # 要求梯度的变量名
+
+        self.feature_dict = {}
+        self.gradient_dict = {}
+        self.feature = []
+        self.gradient = []
+        self.handlers = []
+        self.net.eval()
+        self.test = None
+        self.meta_path = []
+        self.coalesced_graph = {}
+        self.coalesced_graph_node_idx = {}  # 分元路径的，涉及到的邻居节点的index
+        self.coalesced_graph_node_idx_all = torch.tensor([])  # 全部的邻居节点index
+        self.N = N
+        self.p = p
+        self.threshold = threshold
+
+        self.output = self.net(self.flow.hg, self.flow.model.input_feature())[self.flow.category][self.flow.test_idx]
+
+    def generate_masks(self, idx):
+        """
+        生成掩码，按照定义好的元路径和卷积层数决定节点掩码的大小
+        通过元路径先生成同质图，再找到n阶的邻居，就是计算图，计算图即为节点掩码的范围
+        （如果有使用异质节点的，之后可以考虑再扩展）
+        p: 掩码为1的概率
+        N: 生成掩码的数量
+        idx: 测试集中的第idx个节点
+
+        Returns
+        node_idx: 对应节点的索引
+        node_masks: 对应节点的掩码
+        """
+        num_convs = 1  # 卷积层数 GTN这里目前都是1
+        # self.meta_path = self.flow.args.meta_paths_dict  # GTN是自动生成同质图的方法，用不到元路径的概念
+
+        # 利用GTN自动产生的基于元路径的同质图 并找到全部邻居节点
+
+
+
+
+        for mp, mp_value in self.meta_path.items():
+            self.coalesced_graph[mp] = dgl.metapath_reachable_graph(self.flow.hg, mp_value)
+            idx = torch.where(self.coalesced_graph[mp].ndata["test_mask"] == 1)[0][
+                idx]  # 该同质图中待测试节点的index（不是全图，是该类节点中的index）
+            self.coalesced_graph_node_idx[mp] = torch.tensor([idx])  # 找邻居节点
+            for i in range(num_convs):
+                graph = self.coalesced_graph[mp].sample_neighbors(self.coalesced_graph_node_idx[mp], -1)
+                self.coalesced_graph_node_idx[mp] = torch.cat(
+                    (graph.edges()[0], self.coalesced_graph_node_idx[mp])).unique()
+            self.coalesced_graph_node_idx_all = torch.cat(
+                (self.coalesced_graph_node_idx[mp], self.coalesced_graph_node_idx_all)).unique()
+
+        # 将全部邻居节点生成节点掩码
+        num_of_nodes = len(self.coalesced_graph_node_idx_all)
+        node_masks = (np.random.rand(self.N, num_of_nodes) < self.p).astype(float)  # 概率1-p置为0
+        return self.coalesced_graph_node_idx_all, node_masks
+
+    def gen_exp(self, idx):
+        """
+        为测试集中第idx个样本生成节点重要性解释，默认为概率最高的那个类生成解释
+        包含总节点重要性和不同同质图的节点重要性
+        Parameters
+        ----------
+        idx: 第idx个样本
+
+        Returns 具有梯度的节点的index，以及相应的重要性。
+                nonzeroindex, grad_sum:   shape ---> num_important_nodes
+                idx_list, grad_list:  shape  ---> (num_channels, num_important_nodes)
+        -------
+
+        """
+        self.meta_path = []
+        self.coalesced_graph = {}
+        self.coalesced_graph_node_idx = {}  # 分元路径的，涉及到的邻居节点的index
+        self.coalesced_graph_node_idx_all = torch.tensor([])  # 全部的邻居节点index
+
+        # 生成节点掩码，根据计算图生成 (目前所采到的，应该都是和待预测节点同一个类别的节点，扰动特征矩阵的时候也只考虑同类别节点即可）
+        node_idx, node_masks = self.generate_masks(idx)
+        node_masks_non = (node_masks == 0).astype(float)  # 对mask取反 看被遮掉特征的重要性
+        # 进行扰动
+        feat_masked = self.flow.model.input_feature()[self.flow.category].unsqueeze(0).repeat(self.N, 1,
+                                                                                              1)  # 对特征矩阵进行扰动，这里只涉及到待预测类型节点的特征矩阵
+        node_masks_all = (torch.zeros((self.N, len(feat_masked[0]))).double()  # 需要扩展成完整的节点掩码以对特征矩阵进行扰动
+                          .scatter_(1, node_idx.unsqueeze(0).repeat(self.N, 1).long(), torch.tensor(node_masks)))
+        feat_masked = torch.mul(node_masks_all.unsqueeze(2), feat_masked)
+        # 获取原概率 self.output
+        prob_init = F.softmax(self.output[idx])  # 原始概率
+        # 计算扰动后的结果以计算权重
+        feat_dict = self.flow.model.input_feature().copy()
+        weights = []
+        for feat_m in tqdm(feat_masked):
+            feat_dict[self.flow.category] = feat_m.float()
+            output = self.net(self.flow.hg, feat_dict)[self.flow.category][self.flow.test_idx][idx]
+            prob = F.softmax(output)
+            weight = prob_init - prob
+            for i in range(len(weight)):
+                if weight[i] <= self.threshold:
+                    weight[i] = 0
+            weights.append(weight)
+            gc.collect()
+        weights = torch.stack(weights).detach().numpy()
+        attribution = (weights.T.dot(node_masks_non) / self.N / (1 - self.p))[torch.argmax(prob_init)]
+
+        print("--------rise for inx {}, {} nodes important".format(idx, len(node_idx)))
+        return node_idx.long().detach().numpy(), torch.tensor(attribution).unsqueeze(0).detach().numpy(), None, None
 
 
 class InterpretEvaluator(object):
@@ -244,12 +362,12 @@ class InterpretEvaluator(object):
         """
         m1_list = []
         m2_list = []
-        print("calculate test metrics for %s" % self.interpreter.__class__.__name__)
+        print("\ncalculate test metrics for %s" % self.interpreter.__class__.__name__)
         for test_idx in tqdm(range(counts)):
             w_pos, w_neg = self.interpreter.gen_exp(test_idx)
             prob = self.flow.model.predict_lime(self.test[test_idx].reshape(1, -1))
             max_idx = np.argmax(w_pos)
-            sample = self.test[test_idx].copy()
+            sample = self.test[test_idx].copy()  # test是基于元路径的node embedding，拿一个出来，直接通过它做预测看结果
             sample[max_idx * self.flow.args.hidden_dim: (max_idx + 1) * self.flow.args.hidden_dim] = 0
             prob_max = self.flow.model.predict_lime(sample.reshape(1, -1))
             m1_list.append(np.max(prob, axis=1) - prob_max[0][np.argmax(prob)])

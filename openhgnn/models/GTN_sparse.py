@@ -274,7 +274,7 @@ class GTConv(nn.Module):
         self.weight = nn.Parameter(th.Tensor(out_channels, in_channels))
         self.softmax_flag = softmax_flag
         self.reset_parameters()
-        self.filter = None
+        self.filter = None  # 这里是想知道在一个图里面每个元路径的权重 感觉用不到了 不定性分析这个网络
 
     def reset_parameters(self):
         nn.init.normal_(self.weight, std=0.01)

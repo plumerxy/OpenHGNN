@@ -15,7 +15,7 @@ from openhgnn.InterpretGTN import Lime
 from openhgnn.InterpretGTN import InterpretEvaluator
 from openhgnn.InterpretGTN import Saliency
 import itertools
-from .interpret_utils import node_distribution_plot, han_inter
+from .interpret_utils import node_distribution_plot, han_inter, interpreter
 from .interpret_utils import gtn_inter
 
 __all__ = ['Experiment']
@@ -73,6 +73,7 @@ class Experiment(object):
                  hpo_trials: int = 100,
                  output_dir: str = "./openhgnn/output",
                  conf_path: str = default_conf_path,
+                 interpret: int = 1,
                  **kwargs):
         self.config = Config(file_path=conf_path, model=model, dataset=dataset, task=task, gpu=gpu)
         self.config.model = model
@@ -86,6 +87,7 @@ class Experiment(object):
         # self.config.seed = seed
         self.config.hpo_search_space = hpo_search_space
         self.config.hpo_trials = hpo_trials
+        self.config.interpret = interpret
 
         if not getattr(self.config, 'seed', False):
             self.config.seed = 0
@@ -109,15 +111,17 @@ class Experiment(object):
             # hyper-parameter search
             hpo_experiment(self.config, trainerflow)
         else:
-            """ GNN模型训练部分 """
             flow = build_flow(self.config,
                               trainerflow)  # 所有可用的trainerflow类会被注册到一个字典中，根据config所设定的flow名，构造一个相应的trainerflow对象。
-            # result = flow.train()  # 训练一个分类器
-            # torch.save(flow.model, "han.pth")
-            flow.model = torch.load("han.pth")
-            data = han_inter(flow)
-            # output = flow.model(flow.hg, flow.model.input_feature())
-            # return result
+            if self.config.interpret == 0:  # 训练一个分类器
+                result = flow.train()
+                torch.save(flow.model, self.config.output_dir+"/model_" + self.config.dataset_name + ".pth")
+                output = flow.model(flow.hg, flow.model.input_feature())
+                return result
+            elif self.config.interpret == 1:  # 进行解释
+                flow.model = torch.load(self.config.output_dir+"/model_" + self.config.dataset_name + ".pth")
+                data = interpreter(self.config, flow)
+
 
 
     def __repr__(self):
